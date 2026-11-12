@@ -137,7 +137,9 @@ def main():
     p.add_argument("--branches", type=int, default=3, help="readings of the question run in parallel (0 = single analyze)")
     p.add_argument("--router", action="store_true", help="route each question to a task family with its task tool")
     p.add_argument("--temperature", type=float, default=None, help="sampling temperature (default: the server's)")
-    p.add_argument("--router-think", default="on", choices=["on", "capped", "off", "budget"], help="thinking of the router call")
+    p.add_argument("--router-think", default="on", choices=["on", "capped", "off", "budget", "prompt"],
+                   help="thinking of the router call (prompt: thinking off, short reasoning written in the JSON)")
+    p.add_argument("--agent-think", default="on", choices=["on", "off"], help="thinking of the agent node (tool calls)")
     p.add_argument("--think-cap", type=int, default=2048, help="output cap of a capped thinking call")
     p.add_argument("--verify", action="store_true", help="check the task tool call against the question (router)")
     p.add_argument("--verify-general", action="store_true", help="with --verify: check information_finder answers too")
@@ -167,7 +169,8 @@ def main():
                                                   temperature=args.temperature),
                                  rulebook=rulebook, cache_control=False, finalize_no_think=True, analyze=not args.no_analyze, branches=0 if args.router else args.branches,
                                  router=args.router, router_think=args.router_think, think_cap=args.think_cap,
-                                 verify=args.verify, verify_general=args.verify_general)
+                                 verify=args.verify, verify_general=args.verify_general,
+                                 agent_think=args.agent_think == "on")
                     for url in args.base_url.split(",") if url.strip()]
         context = contexts[0]
     else:

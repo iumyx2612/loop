@@ -18,7 +18,7 @@ from langgraph.runtime import Runtime
 from langgraph.types import Command
 from pydantic import BaseModel, Field
 
-from src.datamate.query_agent.prompts import ANALYSIS, ANALYZE, FINALIZE, INSIGHT, RECHECK_TYPE, ROUTE, SYNTHESIZE, SYSTEM, TASK_HINT, USER, VERIFY, VERIFY_RETRY, QUARTER_CHECK
+from src.datamate.query_agent.prompts import ANALYSIS, ANALYZE, FINALIZE, INSIGHT, RECHECK_TYPE, ROUTE, SYNTHESIZE, SYSTEM, TASK_HINT, USER, VERIFY, VERIFY_RETRY, QUARTER_CHECK, ROUTE_OFF, AGENT_OFF
 from src.datamate.query_agent.periods import resolve_period
 from src.datamate.query_agent.state import QueryState
 from src.datamate.query_agent.tools import TOOLS, Period, _lunar, _shop
@@ -57,7 +57,8 @@ class QueryContext:
     router: bool = False
     # Thinking of the router call: "on" (thinking, then without on a parse failure), "capped" (thinking with at most
     # think_cap output tokens, then without), "off" (without, then capped thinking on a parse failure), "budget"
-    # (think at most think_cap tokens, then close the thinking and write the reply; see _budget_reply)
+    # (think at most think_cap tokens, then close the thinking and write the reply; see _budget_reply), "prompt"
+    # (thinking off; its own prompt ROUTE_OFF: the reasoning is written step by step in the JSON)
     router_think: str = "on"
     think_cap: int = 2048
     # True (with router): a short check (thinking off) that the task tool's call matches the question; on a mismatch
@@ -65,6 +66,8 @@ class QueryContext:
     verify: bool = False
     # True (with verify): also check the general path's information_finder / calculate calls before finalize
     verify_general: bool = False
+    # False: the agent node (tool calls) runs with Qwen thinking off too
+    agent_think: bool = True
 
 
 def shop_brief(shop_dir: str) -> str:
@@ -266,7 +269,12 @@ def agent(state: QueryState, runtime: Runtime[QueryContext]) -> Command[Literal[
     if state.get("checks"):  # after a failed check the right tool may be another family's
         task_tools = task_tools + [t for t in TASK_TOOLS.values() if t not in task_tools]  # tools are unhashable
     llm = runtime.context.model.bind_tools(TOOLS + task_tools)
-    response = llm.invoke([*_opening_messages(state, runtime.context), *state["messages"]])
+    if not runtime.context.agent_think:
+        llm = llm.bind(extra_body={"chat_template_kwargs": {"enable_thinking": False}})
+    opening = _opening_messages(state, runtime.context)
+    if not runtime.context.agent_think:  # thinking off: the steps it would think through, written out (agent only)
+        opening[-1] = HumanMessage(opening[-1].content + AGENT_OFF)
+    response = llm.invoke([*opening, *state["messages"]])
     response = repair_tool_calls(response)
     response = repair_task_calls(response, state)
     response = conclude_if_done(response, state["messages"])
@@ -377,6 +385,7 @@ def _json_reply(context: QueryContext, prompt: list, think: str, node: str) -> t
     routes = {"on": [("think", model), ("no_think", _no_think(model))],
               "capped": [("think_capped", model.bind(max_tokens=cap)), ("no_think", _no_think(model))],
               "off": [("no_think", _no_think(model, 1024)), ("think_capped", model.bind(max_tokens=cap))],
+              "prompt": [("no_think", _no_think(model, 1024)), ("no_think", _no_think(model, 1024))],
               "budget": []}[think]
     calls = []
     if think == "budget":  # one bounded thinking pass; a parse failure falls back to thinking off
@@ -427,8 +436,10 @@ def _recheck_quarter(state: QueryState, context: QueryContext, data: dict) -> li
 
 def _route(state: QueryState, context: QueryContext) -> Command:
     """Router: scope check, the task family of the question and a clarified wording; nothing else is planned here."""
-    prompt = [*_opening_messages(state, context), HumanMessage(ROUTE.format(
-        period_kinds=Period.model_fields["kind"].description))]
+    # thinking off ("prompt"): its own prompt, the reasoning written step by step in the JSON (see ROUTE_OFF)
+    route = (ROUTE_OFF if context.router_think == "prompt" else ROUTE).format(
+        period_kinds=Period.model_fields["kind"].description)
+    prompt = [*_opening_messages(state, context), HumanMessage(route)]
     try:
         data, calls = _json_reply(context, prompt, context.router_think, "route")
     except ValueError as e:  # no routing: the agent works with the general tools
@@ -450,7 +461,10 @@ def _route(state: QueryState, context: QueryContext) -> Command:
                        goto="finalize")
     task = str(data.get("task", "other"))
     calls += _recheck_quarter(state, context, data)
-    reading = {k: data[k] for k in ("clarified_question", "period", "answer_type") if data.get(k)}
+    keys = ("clarified_question", "period", "answer_type")
+    if context.router_think == "prompt":  # thinking off: the agent also follows the router's quoted filters
+        keys += ("measure_filters",)
+    reading = {k: data[k] for k in keys if data.get(k)}
     if isinstance(reading.get("period"), dict):
         reading["period_dates"] = _check_period(reading["period"], state)
     return Command(update={"llm_calls": calls, "task": task, "analysis": json.dumps(reading, ensure_ascii=False)}, goto="agent")

@@ -272,3 +272,111 @@ Question: {question}
 Does the question itself name a quarter (the word quý, or Q followed by a number) for this period: {words}?
 T<n>, Th<n> and tháng <n> name a month, not a quarter. Reply with only one JSON object: {{"quarter_named": true or false}}
 """
+
+# Router prompt for thinking off (router_think "prompt"); ROUTE is the one for thinking on. Without thinking the model
+# reasons only in what it writes, so the steps are spelled out in a fixed order and each written reasoning field sits
+# right before the decision it supports, in one flat JSON object (a nested "reasoning" object got closed early).
+ROUTE_OFF = """
+Before any tool is called, classify the question by following the steps below in order. Do not answer it.
+Thinking is off: you reason only in what you write, so write each step's short reasoning field before its decision.
+Every reasoning field is one short line (at most 25 words).
+
+Step 1, reading: the question word for word, only with abbreviations, typos and missing diacritics fixed
+(dthu = doanh thu, bnhiu = bao nhiêu, th = tháng, đh = đơn hàng, sp = sản phẩm, sốp / shop / tiệm / quán = the shop
+itself, kl = khách lẻ; z / ha / nha / hen only soften the tone). Do not add, drop or replace any other word: no product,
+group, date or measure that is not written. Keep the words the rulebook defines as written (khách sộp, khách trung
+thành, hàng ưa chuộng, thợ chăm chỉ, giờ cao điểm, tỉ lệ huỷ ...): their meaning comes from the rulebook, not from you.
+
+Step 2, period: quote the words that set the period ("period_words"), then write the period object ("period").
+Period kinds of information_finder: {period_kinds}.
+- "T<n>", "Th<n>", "tháng <n>", "<n>/<yy>", "<n>-<yyyy>" are a MONTH (T3/2025 = month 3 of 2025, 8/26 = month 8 of
+  2026, never a day). A day is written with a day and a month (ngày 8/8, 08/08/2026). A quarter is always written
+  "quý" or "Q". "tháng này", "th này", "thang nay", "th ni" = this month, never today.
+- Relative words keep their relative kind, counted from today: hôm nay → today, hôm qua → yesterday, tuần này →
+  this_week, tuần rồi / tuần trước → last_week, tháng này → this_month, tháng trước → last_month, N ngày gần nhất →
+  last_n_days. Never turn them into dates yourself.
+- Explicit days use a day or a range; a month or quarter without a year is the latest one up to today.
+- For a comparison, "period" is the period asked about (the first one), not the one it is compared with.
+
+Step 3, measure and filters ("measure_filters"): what is counted or summed (doanh thu, số đơn, số lượng in a unit,
+số khách, đơn huỷ, tỉ lệ huỷ, giá, lãi gộp ...), then each filter with the question's own words in quotes: product,
+product group, customer, customer group, seller, channel, payment method, shift, size (M / L), unit (gói, lon, ly,
+đĩa ... asked for all products). A filter exists only when its words are in the question; with none, write
+"no filter". Never take a group or product from the shop description when the question does not name it.
+
+Step 4, final step and task family. Write the last step that produces the answer ("final_step"), then pick the
+FIRST family below whose test it passes ("task"):
+1. price_change: since a product's price rose to P, quantity sold in N days after vs the N days before.
+2. unsold: products sold before a period with no sale in it (hàng ế, không bán được cái nào): their number or names.
+3. compare: how much higher / lower (the % change or the difference) one period is than another (so với kỳ trước,
+   cùng kỳ, tháng trước, hơn hay kém), or one group than another in the same period (ca chiều vs ca sáng).
+4. values_by_period: the values themselves of several named periods or groups ("lần lượt bao nhiêu", "mỗi tháng",
+   "từng bên bao nhiêu"), not their difference.
+5. best_period: which day / week / month is the highest or lowest.
+6. count_threshold: how many days / orders / customers / products meet a threshold (từ X trở lên, ít nhất N, trên X),
+   or what % of them do.
+7. share: what % a part (group, product, channel, payment method, customer group) is of the whole.
+8. ranking: which product / customer / seller / group is the highest or lowest, or the top k.
+9. single_value: one number of one period (doanh thu, số đơn, trung bình một đơn, số lượng bán, số khách, đơn huỷ,
+   tỉ lệ huỷ, giá bán, lãi gộp), with or without a filter.
+10. other: anything else (tăng liên tục, several steps that fit none of the above).
+
+Step 5, answer_type: number, percent, date, boolean, string, list or table. "bao nhiêu / mấy <things>" asks for a
+count (number), whatever the things are; a list is asked with "nào", "những ... nào", "liệt kê", "kể tên", "top k".
+
+Step 6, scope: say which records the answer needs ("scope_check"), then decide "scope":
+- "out": it needs a kind of record a sales table never holds (the list in Scope and answerability: tồn kho, nhập
+  hàng, nhà cung cấp, công nợ, khách còn nợ, thu nợ, trả góp, lô, hạn dùng, thuốc kê đơn, hoạt chất, lãi ròng, chi
+  phí, giao hàng, bảo hành ...). Write the kind of record in "scope_reason".
+- "not_recorded": it needs a column listed as "not recorded" for this shop above (product groups, customer groups,
+  channel, payment method, seller, order time for hours / shifts, cost price for lãi gộp), or something sales never
+  record: customer gender, customer address, the reason for a cancellation or return, an opinion (ngon nhất, thân
+  thiện, uy tín, chất lượng tốt, trung thực), advice. Name it in "needs": one of product_group, customer_group,
+  channel, payment_method, seller, order_time, cost_price, customer_gender, customer_address, reason, opinion, advice.
+- "in": everything else. When unsure, "in".
+
+Step 7, clarified_question: the reading of step 1 with the period written exactly (dates for a day, "tháng 8/2026"
+for a month); nothing else changed.
+
+Reply with only one flat JSON object, the keys in exactly this order, no other text:
+{{"reading": "...", "period_words": "...", "period": {{...}}, "measure_filters": "...", "final_step": "...",
+ "task": "...", "answer_type": "...", "scope_check": "...", "scope": "...", "scope_reason": "...", "needs": "...",
+ "clarified_question": "..."}}
+
+Example (today 2026-05-20): "tuan truoc ca sang ban dc bnhiu don z"
+{{"reading": "tuần trước ca sáng bán được bao nhiêu đơn", "period_words": "tuần trước → last_week",
+ "period": {{"kind": "last_week"}}, "measure_filters": "số đơn; shift: \\"ca sáng\\"",
+ "final_step": "one count of orders in one period", "task": "single_value", "answer_type": "number",
+ "scope_check": "sales orders with their shift", "scope": "in", "scope_reason": "", "needs": "",
+ "clarified_question": "Tuần trước, ca sáng bán được bao nhiêu đơn?"}}
+
+Example (today 2026-05-20): "Q1/2026 khach nao mua nhieu tien nhat"
+{{"reading": "quý 1/2026 khách nào mua nhiều tiền nhất", "period_words": "Q1/2026 → quarter 1 of 2026",
+ "period": {{"kind": "quarter", "quarter": 1, "year": 2026}}, "measure_filters": "doanh thu theo khách; no filter",
+ "final_step": "the customer with the highest revenue", "task": "ranking", "answer_type": "string",
+ "scope_check": "sales orders with their customer", "scope": "in", "scope_reason": "", "needs": "",
+ "clarified_question": "Trong quý 1/2026, khách nào mua nhiều tiền nhất?"}}
+
+Example (today 2026-05-20): "th4 khach con no tiem tong bnhiu"
+{{"reading": "tháng 4 khách còn nợ tiệm tổng bao nhiêu", "period_words": "th4 → month 4 of 2026",
+ "period": {{"kind": "month", "month": 4, "year": 2026}}, "measure_filters": "tiền khách còn nợ",
+ "final_step": "one total of debt", "task": "single_value", "answer_type": "number",
+ "scope_check": "debt records (công nợ), not sales", "scope": "out", "scope_reason": "công nợ", "needs": "",
+ "clarified_question": "Trong tháng 4/2026, tổng tiền khách còn nợ tiệm là bao nhiêu?"}}
+"""
+
+# Added to the agent's question message when its thinking is off: the steps it would otherwise think through.
+AGENT_OFF = """
+Thinking is off, so work by these steps:
+1. Period: copy the period object of the first reading above exactly, with no field added (period_dates are its real
+   dates). Change it only when it clearly contradicts the question's own words.
+2. Measure: when the question uses a term the rulebook defines (khách sộp, khách trung thành, hàng ưa chuộng, thợ /
+   nhân viên chăm chỉ, tỉ lệ huỷ, trung bình một đơn ...), use the measure of that definition (rulebook §1 and §3).
+   "bao nhiêu <unit>" (gói, lon, ly, đĩa ...) of all products is qty_base with filters.base_unit = that unit; "size M /
+   L" is filters.size.
+3. Filters: only those in measure_filters, i.e. written in the question. Call find_entity only for a name written in
+   the question; if no candidate is that item, reply OUT OF SCOPE. Never add a group or product the question does not
+   name.
+4. Call the tool for the question once. When its output ends with ANSWER_JSON, or already prints the single value
+   asked, reply in plain text with that value and no further call.
+"""

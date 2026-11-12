@@ -296,3 +296,58 @@ Train (đáp án của ban tổ chức):
 Chi phí final3 trên public (H100):
 - Token output khoảng 1.2k mỗi câu: router 832, agent 355, verify 36.
 - Thời gian trung vị 16.6 s mỗi câu, p90 27 s. router3 trung vị 24 s, đuôi tới vài phút.
+
+## 10. Tắt thinking và chế độ hybrid (đề xuất: reasoning viết trong prompt thay vì thinking)
+
+Chế độ mới, prompt cũ không đổi:
+- `--router-think prompt`: router tắt thinking, dùng prompt riêng `ROUTE_OFF` (prompts.py). Model đi 7 bước theo rule (đọc câu, kỳ, chỉ số và filter, loại câu hỏi, kiểu đáp án, phạm vi, câu hỏi viết lại); mỗi bước viết một dòng suy luận ngắn ngay trước quyết định, trong một JSON phẳng, có 3 ví dụ. Filter phải trích nguyên văn từ câu hỏi; thuật ngữ rulebook (sộp, trung thành, ưa chuộng, chăm chỉ ...) giữ nguyên chữ.
+- `--agent-think off`: agent tắt thinking và nhận thêm `AGENT_OFF` (4 bước: chép period của router, chỉ số theo định nghĩa rulebook, chỉ filter có trong câu hỏi, gọi tool một lần). `AGENT_OFF` chỉ gắn vào agent node, không vào router / verify / finalize.
+- Ở chế độ `prompt`, router chuyển thêm `measure_filters` cho agent.
+
+Bài học khi tắt thinking:
+- Một object `reasoning` lồng nhau làm model đóng JSON sớm, không viết `task` / `period` → dùng JSON phẳng.
+- Bước viết lại câu hỏi (`clarified_question`) hay bịa (thêm nhóm hàng, "th này" → hôm nay, "khách sộp" → mua nhiều tiền nhất) → chỉ cho sửa viết tắt và dấu, không thêm bớt chữ.
+
+### Kết quả (H100, 3 replica)
+
+Public (1000 câu, đáp án thật):
+
+| Cấu hình | Điểm | ok / bad / abstain | Thời gian (trung vị / p90) | Token output mỗi câu (trung vị / TB / p99) |
+|---|---|---|---|---|
+| final3_vg: router thinking ≤1024, agent thinking | 0.706 | 743 / 37 / 220 | 16.2 s / 31.8 s | 1138 / 1322 / 4445 |
+| tắt hết, bản 1 (nối thêm vào prompt cũ) | 0.665 | 709 / 44 / 247 | 4.6 s / 11.7 s | khoảng 280 |
+| tắt hết, bản 2 (`ROUTE_OFF` + `AGENT_OFF`) | 0.697 | 726 / 29 / 245 | 4.3 s / 10.0 s | 279 / 434 / 3179 |
+| **hybrid: router `prompt`, agent thinking** | **0.722** | 746 / 24 / 230 | 6.2 s / 16.6 s | 482 / 624 / 3568 |
+
+Train (591 câu):
+
+| Cấu hình | ok / bad / abstain | net | Điểm |
+|---|---|---|---|
+| final3_vg | 494 / 9 / 88 | 485 | 0.821 |
+| tắt hết, bản 2 | 489 / 7 / 95 | 482 | 0.816 |
+| hybrid | 491 / 9 / 91 | 482 | 0.816 |
+
+Kết luận theo từng bước:
+- Router không cần thinking: prompt từng bước bằng hoặc tốt hơn, tốn khoảng 1/5 token.
+- Agent (chọn tool, điền tham số) cần thinking: tắt thì public mất khoảng 0.025. Khi có thêm nhiều bảng và tool, bước này càng cần suy luận.
+- Verify, finalize, quarter check giữ tắt thinking.
+
+Cấu hình đề xuất (hybrid):
+```
+.venv/bin/python scripts/run_agent.py --split public_test --base-url http://localhost:8000/v1 --model Qwen3.5-9B \
+  --router --temperature 0 --router-think prompt --agent-think on --verify --verify-general
+```
+
+### TODO (chưa làm)
+
+Lỗi còn lại của bản tắt hết so với final3_vg (37 câu vg đúng mà bản này sai / bỏ qua): verify báo sai rồi thử lại vẫn sai 19, agent trả lời sai 10, agent tự kết luận OUT OF SCOPE 6.
+
+- [ ] **Giới hạn thinking của agent** (hybrid): tối đa khoảng 1024–1536 token mỗi lượt, quá thì bắt buộc gọi tool (giống `_budget_reply` của router). Để thời gian trên 5090 có trần; p99 token agent hiện khoảng 2000, tối đa 4128.
+- [ ] **Kiểm tra tham số tool bằng code theo schema**, không viết luật riêng cho từng câu:
+  - Bỏ field không thuộc kind của period (ví dụ `last_week` + `date` / `n` / `as_of_date`, `this_week` + `as_of_date`): khoảng 7 câu.
+  - Chỉ cho gọi `find_entity` với chữ có trong `measure_filters` của router (tránh tra từ hỏi "mô", "chi", hay "lon", "đĩa", "điện tử"): khoảng 8 câu.
+- [ ] **Sửa `ROUTE_OFF` ở chỗ chọn loại câu hỏi**: "bao nhiêu % khách / đơn / ngày đạt ngưỡng" là count_threshold dù có chữ "chiếm %"; "so sánh ... xem cái nào cao nhất" là best_period / ranking dù có chữ "so sánh": khoảng 5 câu.
+- [ ] **Prompt verify và verify-retry riêng cho chế độ tắt thinking**: verify chỉ soát kỳ, chỉ số, filter, tool (không phán key sản phẩm như `latte (m)`, không tự diễn giải lại câu hỏi); lần thử lại đưa lại period của router cùng lỗi verify nêu: khoảng 6–8 câu.
+- [ ] Đọc "8/26" khi hôm nay cùng tháng: đáp án hiểu là ngày 26/8, rule hiện tại ép thành tháng 8/2026. Cần xem lại rule mà không làm hỏng "8/25 = tháng 8/2025".
+- [ ] Hướng lớn hơn, thử sau: với các loại câu hỏi đã có task tool, cho một bước JSON điền thẳng tham số tool rồi code gọi tool (bỏ vòng agent tự do). Cân nhắc kỹ vì sau này có nhiều bảng và tool, agent cần chủ động.
+- [ ] Chạy lại toàn bộ trên 5090 (hoặc giả lập băng thông) để đo thời gian thật của hybrid.
