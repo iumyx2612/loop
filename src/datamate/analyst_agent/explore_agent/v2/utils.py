@@ -6,11 +6,14 @@ from openai import LengthFinishReasonError
 from langgraph.runtime import Runtime
 from pydantic import BaseModel
 
-from src.datamate.analyst_agent.explore_agent.state import ColumnSource, ExploreContext, StatusWord, TableRef
+from src.datamate.analyst_agent.explore_agent.state import (
+    ColumnSource, ConversionSource, ExploreContext, StatusWord, TableRef,
+)
 from src.datamate.analyst_agent.explore_agent.utils import raw_text, usage
 
 # state field -> the model of its items
-PYDANTIC_LISTS = {"line_tables": TableRef, "columns": ColumnSource, "statuses": StatusWord}
+PYDANTIC_LISTS = {"line_tables": TableRef, "columns": ColumnSource, "statuses": StatusWord,
+                  "conversions": ConversionSource}
 
 
 def call_structured(runtime: Runtime[ExploreContext], schema: type[BaseModel],

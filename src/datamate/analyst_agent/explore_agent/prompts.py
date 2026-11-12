@@ -1,5 +1,5 @@
-"""Prompts shared by every version of the explore_agent. Kept short and single-purpose: the target model is ≤ 9B.
-Each version's own prompts live with its nodes (v1: v1/think/prompts.py, v1/tool/prompts.py)."""
+"""Prompts of the shared fixed steps (nodes.py). Kept short and single-purpose: the target model is ≤ 9B.
+Each workflow step's own prompts live with its nodes (v2/<step>/prompts.py)."""
 
 # confirm_headers (nodes.py)
 HEADER = """Below are the first rows of one sheet from a shop's Excel file. Some sheets start with title rows, \

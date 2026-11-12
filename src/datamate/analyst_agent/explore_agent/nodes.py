@@ -1,12 +1,11 @@
-"""The fixed steps every version of the explore_agent starts with (before any exploring):
+"""The fixed steps the explore_agent's workflow starts with:
 
-    START → confirm_headers → prepare → (the version's own nodes)
+    START → confirm_headers → prepare → (the workflow's steps, v2/agent.py)
 
 - confirm_headers: for xlsx tables the README does not describe, one small LLM call per group of tables that
   share a header (structured output: the header row). Tables the README describes, csv and sqlite need none.
 - prepare: no LLM. Puts the README and the file list in the state; the later prompts show them.
-Both write only ShopState fields (state.py). A version that needs its own fields set at the start wraps prepare
-(v1: v1/think/nodes.py).
+Both write only ShopState fields (state.py).
 """
 import time
 from collections import Counter

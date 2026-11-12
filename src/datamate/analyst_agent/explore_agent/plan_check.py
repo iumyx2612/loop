@@ -4,13 +4,14 @@ Every problem is one sentence that says what is wrong and what to do, so the exp
 (the 9B rule: checks in code that say exactly what is wrong). An empty list means the plan passed.
 Tables are read through explore.tables, i.e. with the same header rows the agent's tools used.
 """
+import re
 from collections import Counter
 from pathlib import Path
 
 from src.datamate.analyst_agent.explore_agent import explore
 from src.datamate.analyst_agent.explore_agent.state import SalesLinePlan
 from src.datamate.parse import clean_text, fold_accents, is_blank
-from src.datamate.reference.common import SUBTOTAL
+from src.datamate.reference.common import SUBTOTAL, readme_conversions
 
 # sales_lines columns the plan must either map or list as missing. line_no is not asked (user, 2026-11-07): no query
 # tool or rulebook rule uses it, and a running-number column (STT) is easily taken for it instead of the order id
@@ -51,13 +52,18 @@ def _key_text(v) -> str | None:
 class _Shop:
     """The shop's tables, read once per check."""
 
-    def __init__(self, shop_dir: Path, headers: dict | None):
-        self.shop_dir, self.headers = shop_dir, headers
+    def __init__(self, shop_dir: Path, headers: dict | None, skipped: dict | None = None):
+        # skipped: the plan's skipped_rows (the filter step's rows); None for the hand-written plans of
+        # scripts/checks/check_plan_check.py (every row read, subtotal_labels as text). Given, every read leaves
+        # those rows out (as the converter will) and subtotal_labels are regexes (v2 filter_rows.rows.pattern_regex)
+        self.shop_dir, self.headers, self.skipped = shop_dir, headers, skipped
+        self.v2 = skipped is not None
         self.problems: list[str] = []
 
-    def tables(self, file: str, sheet: str | None, what: str) -> list[explore.Table]:
+    def tables(self, file: str, sheet: str | None, what: str, raw: bool = False) -> list[explore.Table]:
+        """raw: every row, also the skipped ones (to check that a subtotal regex matches some row)."""
         try:
-            return explore.tables(self.shop_dir, file, sheet, self.headers)
+            return explore.tables(self.shop_dir, file, sheet, self.headers, None if raw else self.skipped)
         except explore.ExploreError as e:
             self.problems.append(f"{what}: {e}")
             return []
@@ -74,7 +80,7 @@ class _Shop:
             self.problems.append(f"{what}: {_label(file, sheet)} has no column {column!r}. "
                                  f"Its columns: {', '.join(ts[0].columns)}")
             return None
-        return [r[i] if i < len(r) else None for t, i in found for r in t.rows[t.header_row:]]
+        return [r[i] if i < len(r) else None for t, i in found for r in t.data_rows()]
 
 
 def _line_cells(shop: _Shop, plan: SalesLinePlan, column: str, what: str) -> list | None:
@@ -85,7 +91,7 @@ def _line_cells(shop: _Shop, plan: SalesLinePlan, column: str, what: str) -> lis
             i = explore.column_index(t, column)
             if i is not None:
                 seen = True
-                out += [r[i] if i < len(r) else None for r in t.rows[t.header_row:]]
+                out += [r[i] if i < len(r) else None for r in t.data_rows()]
     if not seen:
         shop.problems.append(f"{what}: no line table has a column {column!r}")
         return None
@@ -108,16 +114,19 @@ def _source_cells(shop: _Shop, plan: SalesLinePlan, file: str, sheet: str | None
     return shop.cells(file, sheet, column, what)
 
 
-def _line_rows(shop: _Shop, plan: SalesLinePlan) -> list[tuple[explore.Table, tuple]]:
-    return [(t, r) for ref in plan.line_tables for t in shop.tables(ref.file, ref.sheet, "line_tables")
-            for r in t.rows[t.header_row:]]
+def _line_rows(shop: _Shop, plan: SalesLinePlan, raw: bool = False) -> list[tuple[explore.Table, tuple]]:
+    return [(t, r) for ref in plan.line_tables for t in shop.tables(ref.file, ref.sheet, "line_tables", raw)
+            for r in (t.rows[t.header_row:] if raw else t.data_rows())]
 
 
-def _is_subtotal_row(r: tuple, labels: list[str]) -> bool:
-    """A subtotal / footer row (the fixed SUBTOTAL pattern or one of the plan's subtotal_labels), or a blank row."""
+def _is_subtotal_row(r: tuple, labels: list[str], v2: bool = False) -> bool:
+    """A subtotal / footer row (the fixed SUBTOTAL pattern or one of the plan's subtotal_labels), or a blank row.
+    v2: the filter step's rows are already left out, so only a blank row."""
     texts = [v for v in r if isinstance(v, str) and v.strip()]
     if not any(not is_blank(v) for v in r):
         return True
+    if v2:
+        return False
     folded = [fold_accents(v) for v in texts]
     return any(SUBTOTAL.match(v) for v in texts) or any(fold_accents(lb) in f for lb in labels for f in folded)
 
@@ -182,21 +191,33 @@ def _check_joins(shop: _Shop, plan: SalesLinePlan, line_files: set[str]) -> None
         if j.on_file not in attached:
             p.append(f"{what}: on_file {j.on_file} is not a line table or a table joined before this one")
         keys = shop.cells(j.file, j.sheet, j.key, what)
+        alts = shop.cells(j.file, j.sheet, j.alt_key, what) if j.alt_key else None
         on = _source_cells(shop, plan, j.on_file, j.on_sheet, j.on_key, line_files, what)
         attached.add(j.file)
-        if keys is None or on is None:
+        if keys is None or on is None or (j.alt_key and alts is None):
             continue
-        keys = [k for k in map(_key_text, keys) if k is not None]
-        dup = [k for k, n in Counter(keys).items() if n > 1]
-        if dup:
-            p.append(f"{what}: key {j.key!r} is not unique in {j.file} ({len(dup)} values repeat, e.g. "
-                     f"{', '.join(map(repr, dup[:3]))}); a join key must name one row")
-        wanted = {k for k in map(_key_text, on) if k is not None}
+        # a two-key join (alt_key: code or name in one line column) matches accent-insensitively, like attach
+        norm = (lambda v: fold_accents(k) if (k := _key_text(v)) is not None else None) if j.alt_key else _key_text
+        columns = [(j.key, [norm(v) for v in keys])] + ([(j.alt_key, [norm(v) for v in alts])] if j.alt_key else [])
+        for col, vals in columns:
+            dup = [k for k, n in Counter(v for v in vals if v is not None).items() if n > 1]
+            if dup:
+                p.append(f"{what}: key {col!r} is not unique in {j.file} ({len(dup)} values repeat, e.g. "
+                         f"{', '.join(map(repr, dup[:3]))}); a join key must name one row")
+        if j.alt_key:  # together: a value must not name one row by its key and another by its alt_key
+            per_row = Counter(v for row in zip(columns[0][1], columns[1][1]) for v in {x for x in row if x is not None})
+            both = [k for k, n in per_row.items() if n > 1]
+            if both:
+                p.append(f"{what}: {len(both)} values of {j.key!r} / {j.alt_key!r} name different rows (e.g. "
+                         f"{', '.join(map(repr, both[:3]))}); key and alt_key together must name one row")
+        found_keys = {v for _, vals in columns for v in vals if v is not None}
+        wanted = {k for k in map(norm, on) if k is not None}
         if wanted:
-            found = len(wanted & set(keys)) / len(wanted)
+            found = len(wanted & found_keys) / len(wanted)
             if found < MIN_JOIN_COVERAGE:
-                example = sorted(wanted - set(keys))[:3]
-                p.append(f"{what}: only {found:.0%} of the {j.on_key!r} values are found in {j.file} {j.key!r} "
+                example = sorted(wanted - found_keys)[:3]
+                cols = f"{j.key!r}" + (f" / {j.alt_key!r}" if j.alt_key else "")
+                p.append(f"{what}: only {found:.0%} of the {j.on_key!r} values are found in {j.file} {cols} "
                          f"(not found e.g. {', '.join(map(repr, example))}); the columns do not link these tables")
 
 
@@ -250,7 +271,7 @@ def _check_forward_fill(shop: _Shop, plan: SalesLinePlan, raw_of: dict[str, str]
         return
     if order_col is None:
         return
-    rows = [(t, r) for t, r in _line_rows(shop, plan) if not _is_subtotal_row(r, plan.subtotal_labels)]
+    rows = [(t, r) for t, r in _line_rows(shop, plan) if not _is_subtotal_row(r, plan.subtotal_labels, shop.v2)]
     blank = 0
     for t, r in rows:
         i = explore.column_index(t, order_col)
@@ -266,11 +287,20 @@ def _check_line_texts(shop: _Shop, plan: SalesLinePlan, raw_of: dict[str, str]) 
     p = shop.problems
     rows = _line_rows(shop, plan)
     folded = [[fold_accents(v) for v in r if isinstance(v, str)] for _, r in rows]
-    for field in ("service_fee_names", "non_revenue_names", "subtotal_labels"):
+    if shop.v2:
+        # names: also in the joined tables (a code-only shop's names come from its products table, biz_127);
+        # subtotal_labels are regexes: each must match some line row (the filter step skipped those rows)
+        folded += [[fold_accents(v) for v in r if isinstance(v, str)]
+                   for j in plan.joins for t in shop.tables(j.file, j.sheet, f"joins[{j.file}]") for r in t.data_rows()]
+        _check_label_regexes(shop, plan)
+    fields = ("service_fee_names", "non_revenue_names") + (() if shop.v2 else ("subtotal_labels",))
+    where = "line table or joined table" if shop.v2 else "line table"
+    for field in fields:
         for text in getattr(plan, field):
             key = fold_accents(text)
-            if not any(key in cell for cells in folded for cell in cells):
-                p.append(f"{field}: {text!r} is not in any line table; use the text as it is written")
+            # fold_accents gives None for a whitespace-only cell: skipped (it crashed on biz_127, dev_007, biz_129)
+            if not any(cell is not None and key in cell for cells in folded for cell in cells):
+                p.append(f"{field}: {text!r} is not in any {where}; use the text as it is written")
     if "qty" in raw_of:
         # both ways: return_lines true needs negative quantities, and negative quantities need return_lines true
         # (a look at the first rows misses return lines further down)
@@ -285,21 +315,115 @@ def _check_line_texts(shop: _Shop, plan: SalesLinePlan, raw_of: dict[str, str]) 
                      "true (ask the search agent to show a few of them first if unsure)")
 
 
-def _check_conversions(shop: _Shop, plan: SalesLinePlan, raw_of: dict[str, str]) -> None:
+def _check_label_regexes(shop: _Shop, plan: SalesLinePlan) -> None:
+    """v2: each subtotal label is a regex that compiles and matches at least one line row (row_text, any case)."""
+    from src.datamate.analyst_agent.explore_agent.v2.planner.filter_rows.rows import row_text  # v2 only: no import cycle
+    texts = None
+    for label in plan.subtotal_labels:
+        try:
+            rx = re.compile(label, re.IGNORECASE)
+        except re.error as e:
+            shop.problems.append(f"subtotal_labels: {label!r} is not a valid regex ({e})")
+            continue
+        if texts is None:
+            texts = [row_text(r) for _, r in _line_rows(shop, plan, raw=True)]
+        if not any(rx.search(t) for t in texts):
+            shop.problems.append(f"subtotal_labels: {label!r} matches no line row")
+
+
+TABLE_FIELDS = ("table", "key", "product_column", "unit_column", "factor_column", "factor_format", "base_unit_column")
+MIN_FACTOR_CELLS = 0.9  # share of a conversion table's non-blank factor cells that must read in its factor_format
+_NUMBER = re.compile(r"\s*\d+(?:[.,]\d+)?\s*")
+_NESTED = re.compile(r"\s*\d+(?:[.,]\d+)?(?:\s+\S.*)?")  # 24 or '15 vỉ'
+_TEXT_PART = re.compile(r"\s*1\s+\S.*?=\s*\d+(?:[.,]\d+)?\s+\S.*")  # '1 thùng = 4 bịch'
+
+
+FACTOR_FORMATS = ("number", "nested", "text")  # tried in this order by factor_format_of
+
+
+def factor_ok(v, fmt: str) -> bool:
+    """One non-blank factor cell reads in `fmt`. number: a positive number; nested: a number, or '<n> <unit>' (no
+    '='); text: '1 <big unit> = <n> <base unit>' parts joined by ';' (a bare number is not text)."""
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        return fmt != "text" and v > 0
+    s = str(v)
+    if fmt == "number":
+        return bool(_NUMBER.fullmatch(s))
+    if fmt == "nested":
+        return "=" not in s and bool(_NESTED.fullmatch(s))
+    parts = [part for part in s.split(";") if part.strip()]
+    return bool(parts) and all(_TEXT_PART.fullmatch(part) for part in parts)
+
+
+def factor_format_of(cells: list) -> str | None:
+    """The first format (FACTOR_FORMATS order) that reads ≥ MIN_FACTOR_CELLS of the non-blank cells; None if none."""
+    filled = [v for v in cells if not is_blank(v)]
+    if not filled:
+        return None
+    for fmt in FACTOR_FORMATS:
+        if sum(factor_ok(v, fmt) for v in filled) / len(filled) >= MIN_FACTOR_CELLS:
+            return fmt
+    return None
+
+
+def _check_conversions(shop: _Shop, plan: SalesLinePlan) -> None:
+    """Structure only: each source names things that exist and its factor cells read in the stated format. Not
+    checked (meaning): that a number column is the factor and not a price per big unit (biz_109 'Giá bán')."""
     p = shop.problems
-    if plan.conversions == "file":
-        if plan.conversion_table is None:
-            p.append("conversion_table: conversions = file, so name the conversion file")
-        else:
-            shop.tables(plan.conversion_table.file, plan.conversion_table.sheet, "conversion_table")
-    elif plan.conversion_table is not None:
-        p.append(f"conversion_table: given, but conversions = {plan.conversions}; set conversions = file or drop it")
-    if plan.conversions == "column" and "qty_base" not in raw_of:
-        p.append("conversions: = column, so map qty_base to the line's base-unit quantity column")
+    readme = shop.shop_dir / "README.md"
+    for n, c in enumerate(plan.conversions):
+        what = f"conversions[{n}] ({c.kind})"
+        set_fields = [f for f in TABLE_FIELDS if getattr(c, f) is not None]
+        if c.kind != "table" and set_fields:
+            p.append(f"{what}: {', '.join(set_fields)} belong to kind = table; remove them")
+        if c.kind != "readme_text" and (c.text or c.rows):
+            p.append(f"{what}: text / rows belong to kind = readme_text; remove them")
+        if c.kind == "readme_list":
+            if not readme.exists() or readme_conversions(readme).empty:
+                p.append(f"{what}: the README has no list '  - <product>: 1 <big unit> = <n> <base unit>'")
+        elif c.kind == "readme_text":
+            text = readme.read_text(encoding="utf-8") if readme.exists() else ""
+            # line by line: the text may be several README lines that are not next to each other
+            quoted = [line for line in (c.text or "").splitlines() if line.strip()]
+            if not quoted or any(fold_accents(line) not in fold_accents(text) for line in quoted):
+                p.append(f"{what}: text must be quoted exactly from the README")
+            if not c.rows:
+                p.append(f"{what}: no rows; give each product / big unit / factor the text names")
+            for r in c.rows:
+                if r.factor <= 0:
+                    p.append(f"{what}: factor {r.factor} for {r.product!r} {r.unit!r} must be positive")
+                if c.text and fold_accents(r.product) not in fold_accents(c.text):
+                    p.append(f"{what}: product {r.product!r} is not in the quoted text")
+        else:  # table
+            missing = [f for f in ("table", "key", "product_column", "factor_column", "factor_format")
+                       if getattr(c, f) is None]
+            if c.factor_format != "text" and c.unit_column is None:
+                missing.append("unit_column")
+            if missing:
+                p.append(f"{what}: missing {', '.join(missing)}")
+            if c.table is None:
+                continue
+            for f in ("product_column", "unit_column", "base_unit_column"):
+                if getattr(c, f) is not None:
+                    shop.cells(c.table.file, c.table.sheet, getattr(c, f), f"{what}.{f}")
+            if c.factor_column is None or c.factor_format is None:
+                continue
+            cells = shop.cells(c.table.file, c.table.sheet, c.factor_column, f"{what}.factor_column")
+            filled = [v for v in cells or [] if not is_blank(v)]
+            if cells is not None and not filled:
+                p.append(f"{what}: {c.factor_column!r} is blank on every row")
+            bad = [v for v in filled if not factor_ok(v, c.factor_format)]
+            if filled and len(bad) / len(filled) > 1 - MIN_FACTOR_CELLS:
+                p.append(f"{what}: {len(bad)} of {len(filled)} cells of {c.factor_column!r} do not read as "
+                         f"factor_format = {c.factor_format} (e.g. {', '.join(map(repr, bad[:3]))})")
 
 
-def check_plan(shop_dir: Path, plan: SalesLinePlan, headers: dict | None = None) -> list[str]:
-    shop = _Shop(Path(shop_dir), headers)
+def check_plan(shop_dir: Path, plan: SalesLinePlan, headers: dict | None = None,
+               skipped: dict | None = None) -> list[str]:
+    """skipped: the v2 filter step's rows (state["skipped_rows"]; {} when it marked none). Given (even {}), the
+    plan is read as a v2 plan: those rows left out, subtotal_labels as regexes, names also found in joined tables.
+    None: every row read, subtotal_labels as text (the hand-written plans of scripts/checks/check_plan_check.py)."""
+    shop = _Shop(Path(shop_dir), headers, skipped)
     if not plan.line_tables:
         return ["line_tables: empty; name the table(s) whose rows are the sales lines"]
     for ref in plan.line_tables:
@@ -311,7 +435,7 @@ def check_plan(shop_dir: Path, plan: SalesLinePlan, headers: dict | None = None)
     _check_statuses(shop, plan, line_files)
     _check_forward_fill(shop, plan, raw_of)
     _check_line_texts(shop, plan, raw_of)
-    _check_conversions(shop, plan, raw_of)
+    _check_conversions(shop, plan)
     for a in plan.extra_attributes:
         what = f"extra_attributes[{a.name}]"
         if a.file not in line_files | joined:

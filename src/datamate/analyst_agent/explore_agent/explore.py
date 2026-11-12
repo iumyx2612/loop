@@ -1,4 +1,4 @@
-"""The explore_agent's read-only tools, as plain functions (the LangGraph wrappers live in tools.py).
+"""The explore_agent's read-only helpers, as plain functions (the workflow's steps call them directly).
 
 Every function takes the shop folder and returns a short text for the LLM. Shared conventions:
 - A "table" is one xlsx sheet, one csv file or one sqlite table, addressed by (file, sheet).
@@ -76,7 +76,8 @@ def _trim(rows: list[tuple]) -> list[tuple]:
     return [tuple(r[:width]) + (None,) * (width - len(r)) for r in rows[:last]]
 
 
-@lru_cache(maxsize=16)
+@lru_cache(maxsize=64)  # > a shop's file count: dev_002 has 18 files, and reading them in order through a smaller
+# cache evicts each file just before it is needed again (write_plan took 86 s on dev_002 with 16)
 def _read(path: str, mtime: float) -> dict[str | None, list[tuple]]:
     """All tables of one file: {sheet: rows}. `mtime` is part of the cache key only."""
     p = Path(path)
