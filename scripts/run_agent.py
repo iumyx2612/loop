@@ -41,7 +41,7 @@ REFERENCE_SHOPS = {  # shops with a converted table in data_std/<split>/ (script
     "public_test": [f"dev_{i:03d}" for i in range(1, 15)],
 }
 # Each agent → tools round trip is 2 steps: about 6 tool turns, then finalize. The target is 1–3 turns.
-RECURSION_LIMIT = 14
+RECURSION_LIMIT = 15  # 14 + the analyze step (self-hosted)
 
 
 def _message_usage(m) -> Counter:
@@ -73,7 +73,17 @@ def _usage(messages) -> Counter:
     return u
 
 
-def run_one(q: dict, split: str, context: QueryContext, run_start: float) -> dict:
+def run_one(q: dict, split: str, context: QueryContext, run_start: float, attempts: int = 3) -> dict:
+    """One question; rerun from scratch (after a pause) when the model server could not be reached."""
+    for i in range(attempts):
+        r = _run_one(q, split, context, run_start)
+        if not (r["error"] and "Connection" in r["error"]) or i == attempts - 1:
+            return r
+        time.sleep(20 * (i + 1))
+    return r
+
+
+def _run_one(q: dict, split: str, context: QueryContext, run_start: float) -> dict:
     start = time.perf_counter()
     state = {"question": q["question"], "as_of_date": q["as_of_date"],
              "shop_dir": str(ROOT / "data_std" / split / q["business_id"]),
@@ -102,7 +112,10 @@ def run_one(q: dict, split: str, context: QueryContext, run_start: float) -> dic
     return {"q": q, "submission": submission, "started": round(start - run_start, 2),
             "seconds": time.perf_counter() - start, "error": error,
             "tool_turns": sum(1 for m in messages if isinstance(m, AIMessage) and m.tool_calls),
-            "usage": _usage(messages), "steps": steps, "trace": _trace(messages)}
+            "usage": _usage(messages), "steps": steps, "trace": _trace(messages),
+            "analysis": last.get("analysis"), "task": last.get("task"), "llm_calls": last.get("llm_calls") or [], "insight": last.get("insight"), "choice": last.get("choice"),
+            "branches": [{"reading": b["reading"], "error": b["error"], "trace": _trace(b["messages"])}
+                         for b in last.get("branch_runs") or []]}
 
 
 def main():
@@ -115,6 +128,20 @@ def main():
     p.add_argument("--limit", type=int, help="only the first N questions")
     p.add_argument("--workers", type=int, default=1, help="questions run in parallel")
     p.add_argument("--model", default="claude-sonnet-5-5")
+    p.add_argument("--base-url", default=None, help="OpenAI-compatible endpoint (vLLM), e.g. http://localhost:8000/v1; "
+                   "uses ChatOpenAI instead of ChatAnthropic. Several endpoints (replicas), comma-separated: questions "
+                   "are spread over them round-robin")
+    p.add_argument("--api-key", default="EMPTY", help="API key of --base-url")
+    p.add_argument("--max-tokens", type=int, default=16384, help="output cap per LLM reply incl. thinking (--base-url only)")
+    p.add_argument("--timeout", type=float, default=600, help="seconds per LLM request (--base-url only)")
+    p.add_argument("--branches", type=int, default=3, help="readings of the question run in parallel (0 = single analyze)")
+    p.add_argument("--router", action="store_true", help="route each question to a task family with its task tool")
+    p.add_argument("--temperature", type=float, default=None, help="sampling temperature (default: the server's)")
+    p.add_argument("--router-think", default="on", choices=["on", "capped", "off", "budget"], help="thinking of the router call")
+    p.add_argument("--think-cap", type=int, default=2048, help="output cap of a capped thinking call")
+    p.add_argument("--verify", action="store_true", help="check the task tool call against the question (router)")
+    p.add_argument("--verify-general", action="store_true", help="with --verify: check information_finder answers too")
+    p.add_argument("--no-analyze", action="store_true", help="skip the analyze step (--base-url only)")
     p.add_argument("--out-dir", default=None, help="default: runs/<timestamp>")
     args = p.parse_args()
 
@@ -132,7 +159,20 @@ def main():
 
     out_dir = Path(args.out_dir) if args.out_dir else ROOT / "runs" / dt.datetime.now().strftime("%Y%m%d-%H%M%S")
     out_dir.mkdir(parents=True, exist_ok=True)
-    context = QueryContext(model=ChatAnthropic(model=args.model), rulebook=(split_dir / "rulebook.md").read_text(encoding="utf-8"))
+    rulebook = (split_dir / "rulebook.md").read_text(encoding="utf-8")
+    if args.base_url:  # self-hosted model (vLLM): no Anthropic prompt caching
+        from langchain_openai import ChatOpenAI
+        contexts = [QueryContext(model=ChatOpenAI(model=args.model, base_url=url.strip(), api_key=args.api_key,
+                                                  timeout=args.timeout, max_retries=2, max_tokens=args.max_tokens,
+                                                  temperature=args.temperature),
+                                 rulebook=rulebook, cache_control=False, finalize_no_think=True, analyze=not args.no_analyze, branches=0 if args.router else args.branches,
+                                 router=args.router, router_think=args.router_think, think_cap=args.think_cap,
+                                 verify=args.verify, verify_general=args.verify_general)
+                    for url in args.base_url.split(",") if url.strip()]
+        context = contexts[0]
+    else:
+        context = QueryContext(model=ChatAnthropic(model=args.model), rulebook=rulebook)
+        contexts = [context]
     print(f"{len(questions)} questions, {args.workers} workers, model {args.model} → {out_dir}\n")
 
     lock, stats, by_type = threading.Lock(), Counter(), {}
@@ -140,7 +180,8 @@ def main():
     with open(out_dir / "submission.jsonl", "w", encoding="utf-8") as sub, \
             open(out_dir / "traces.jsonl", "w", encoding="utf-8") as tr, ThreadPoolExecutor(args.workers) as pool:
         run_start = time.perf_counter()
-        futures = [pool.submit(run_one, q, args.split, context, run_start) for q in questions]
+        futures = [pool.submit(run_one, q, args.split, contexts[i % len(contexts)], run_start)
+                   for i, q in enumerate(questions)]
         for i, f in enumerate(as_completed(futures), 1):
             r = f.result()
             q, s = r["q"], r["submission"]
@@ -158,7 +199,9 @@ def main():
                                      "as_of_date": q["as_of_date"], "verdict": verdict, "submission": s,
                                      "expected": key, "error": r["error"], "started": r["started"],
                                      "seconds": round(r["seconds"], 2), "tool_turns": r["tool_turns"],
-                                     "usage": dict(r["usage"]), "steps": r["steps"], "trace": r["trace"]},
+                                     "usage": dict(r["usage"]), "steps": r["steps"], "trace": r["trace"],
+                                     "analysis": r["analysis"], "task": r["task"], "llm_calls": r["llm_calls"], "insight": r["insight"], "choice": r["choice"],
+                                     "branches": r["branches"]},
                                     ensure_ascii=False) + "\n")
                 tr.flush()
                 stats[verdict] += 1

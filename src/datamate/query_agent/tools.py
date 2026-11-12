@@ -44,6 +44,11 @@ class FindEntityInput(BaseModel):
     shop_dir: Annotated[str, InjectedState("shop_dir")]
 
 
+# Below this best score nothing of the shop is the item named (2026-11-12: no right answer in the public run used a key
+# scoring under 0.5; the wrong ones that did were prescription drugs, active ingredients, "sữa số 2" ...)
+NO_MATCH_SCORE = 0.5
+
+
 @tool("find_entity", args_schema=FindEntityInput)
 def find_entity(kind: str, text: str, shop_dir: str) -> str:
     """Look up a product, product group, customer, customer group or seller named in the question and return
@@ -54,6 +59,12 @@ def find_entity(kind: str, text: str, shop_dir: str) -> str:
         table = entities.candidates(_shop(shop_dir), kind, text)
     except LookupError as e:
         return f"NO DATA: {e}"
+    # products / product groups only: a right customer_group match can score low (group names are short)
+    if kind in ("product", "product_group") and (table.empty or table["score"].iat[0] < NO_MATCH_SCORE):
+        return (f"NO MATCH: no {kind.replace('_', ' ')} of this shop is named like {text!r} (best score "
+                f"{table['score'].iat[0] if not table.empty else 0} < {NO_MATCH_SCORE}). Do not drop the filter or "
+                f"use a different item: if the question depends on it, reply OUT OF SCOPE.\n"
+                + finder._table(table, entities.MAX_CANDIDATES))
     return finder._table(table, entities.MAX_CANDIDATES)
 
 
@@ -63,8 +74,9 @@ class Period(BaseModel):
     kind: Literal["day", "today", "yesterday", "this_week", "last_week", "this_month", "month", "quarter", "year",
                   "year_to_date", "last_n_days", "range", "all_before", "tet"] = Field(description=(
         "day (date) | today | yesterday | this_week (Monday → today) | last_week (Mon–Sun) | "
-        "this_month (1st → today) | month (month, year; year omitted = latest one not after today) | "
-        "quarter (quarter, year) | year (year) | year_to_date | last_n_days (n, includes today) | "
+        "this_month (1st → today) | month (month, year; year omitted = latest one not after today; T4/2026, Th4, "
+        "tháng 4 are all month 4) | "
+        "quarter (quarter, year; only when the question says quý or Q) | year (year) | year_to_date | last_n_days (n, includes today) | "
         "range (from_date, to_date, both included) | all_before (date: every day before it, from the start of data) | "
         "tet (year: 23 tháng Chạp → mùng 10 tháng Giêng)"))
     date: str | None = Field(None, description="YYYY-MM-DD, for day and all_before")
@@ -97,11 +109,13 @@ class Filters(BaseModel):
     shift: Literal["morning", "afternoon"] | None = Field(None, description="ca sáng 06:00–13:59, ca chiều 14:00–21:59")
     size: Literal["M", "L"] | None = Field(None, description="drinks whose name ends with (M) / (L)")
     base_unit: str | None = Field(None, description="only products whose base unit is this, e.g. 'chai' for 'bán được mấy chai'")
+    order_amount: Literal["paid", "free"] | None = Field(None, description="paid = orders that took money (phiếu có "
+                                                         "thu tiền); free = orders of 0 đồng (phiếu bảo hành)")
 
 
 class InformationFinderInput(BaseModel):
     measure: Literal["revenue", "order_count", "avg_order_value", "qty_base", "customer_count",
-                     "cancelled_count", "cancel_rate", "unit_price_base", "gross_profit"]
+                     "cancelled_count", "cancel_rate", "unit_price_base", "gross_profit", "day_count"]
     period: Period
     filters: Filters | None = None
     group_by: Literal["product", "product_group", "customer", "customer_group", "seller", "channel",

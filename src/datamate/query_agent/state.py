@@ -1,4 +1,5 @@
 """Graph state of the query_agent (answers questions)."""
+import operator
 from typing import Annotated, TypedDict
 
 import pandas as pd
@@ -20,3 +21,11 @@ class QueryState(TypedDict):
     messages: Annotated[list[AnyMessage], add_messages]
     results: Annotated[dict[str, pd.DataFrame], merge_results]  # handle -> full result frame, read by calculate
     submission: dict
+    insight: str  # branching analyze: what the question asks and where it is ambiguous
+    readings: list  # branching analyze: 1..N readings of the question, one branch each
+    branch_runs: list  # each branch's reading, messages and error
+    choice: int  # the reading synthesize picked (1-based), 0 = none fits → abstain
+    task: str  # router: the task family of the question (compare, ranking, ...), '' / other = general tools
+    analysis: str  # optional: the analyze step's reading of the question, shown to agent and finalize
+    llm_calls: Annotated[list, operator.add]  # LLM calls outside the agent's messages (router, verify): node, tokens
+    checks: int  # verify: how many times a task answer was checked
