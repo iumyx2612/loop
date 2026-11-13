@@ -66,7 +66,12 @@ def snapshot(state: WorkflowState, runtime: Runtime[ExploreContext]) -> dict:
             record["skipped_tables"].append({"table": a["table"], "anchors": anchors,
                                              "why": "its anchors look up no field still to fill"})
             continue
-        linked = {k["anchor"]: k["column"] for k in a["links"]}  # its join columns: no other field may sit there
+        # its join columns: no other field may sit there. An alias pair (attach._alias_links) links twice by one
+        # anchor: the second column is kept as '<anchor> (other spelling)', so e.g. product_code on dev_011's
+        # 'Ghi tắt' short forms is a shared column (retried, then failed by moved_onto_taken)
+        linked = {}
+        for k in a["links"]:
+            linked[k["anchor"] if k["anchor"] not in linked else f"{k['anchor']} (other spelling)"] = k["column"]
         rec = table_snapshot(runtime, shop_dir, a["table"], groups[a["table"]], asked, linked)
         record["snapshots"].append({"round": a["round"], "anchors": anchors, "asked": asked, **rec})
 

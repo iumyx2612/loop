@@ -22,6 +22,10 @@ column alone covers about half of the distinct values, both together all of them
 Such a join gives two links, one per anchor, each with "pair_with" = the other column (rows of `table` attach where
 to_column equals column or pair_with), so the anchors of both count as linked.
 
+Alias pairs (2026-11-13, _alias_links): a table that attached by nothing, with a claimed name anchor, may attach by
+that name column + another column of its own holding a second spelling (dev_011 / dev_014 'Ghi tắt' short forms);
+two links, both of the name anchor, each with "pair_with" and "alias": True.
+
 Because condition 3 is measured against an attached table, wrong claims that confirm each other (biz_123's import
 tables all claim order_id ← MaPhieuNhap) never attach: none of them shares values with the lines.
 
@@ -47,6 +51,12 @@ MIN_COVERAGE = MIN_JOIN_COVERAGE  # 0.5, the same rule plan_check uses for a joi
 MIN_UNIQUE = 0.99  # payments tables are 98-99 % unique on order_id (explore_agent.md: the thin margin); a run can
 # set state["min_unique"] (runner flag --min-unique) to test the anchor resolve with them attached
 PAIRS = (("product_code", "product_name"), ("customer_code", "customer_name"))  # tried together (docstring)
+# Alias pairs (agreed 2026-11-13, user; explore_agent.md step 3 "attach"): a table that attached by nothing, with a
+# claimed name anchor, tries each other column of its own rows as a second spelling of that name
+NAME_ANCHORS = ("product_name", "customer_name")
+ALIAS_NAME_BELOW = 0.9  # user: only when the claimed name alone covers less than this (the name does not explain the lines)
+ALIAS_PAIR_MIN = 0.9  # the two columns together cover at least this
+ALIAS_OWN_MIN = 0.25  # the partner alone covers at least this: a real second spelling, not a coincidental match
 
 
 def value_key(v) -> str | None:
@@ -137,6 +147,8 @@ def attach_tables(anchor_tables: list[dict], groups: dict[str, explore.TableGrou
                                       "coverage": round(coverage, 4), "unique": round(t_unique, 4)})
                         break  # one link per anchor: the first (earliest attached) table it links to
             links += _pair_links(e, attached, entries, values, min_unique, {k["anchor"] for k in links})
+            if not links:
+                links = _alias_links(e, attached, entries, values, groups, min_unique)
             if links:
                 new.append({"table": e["table"], "round": rnd, "links": links})
         if not new:
@@ -216,6 +228,49 @@ def _pair_links(e: dict, attached: list[dict], entries: dict, values: _Values, m
                         for f, c, other in ((f1, c1, c2), (f2, c2, c1))]
                 break
     return out
+
+
+def _alias_links(e: dict, attached: list[dict], entries: dict, values: _Values,
+                 groups: dict[str, explore.TableGroup], min_unique: float) -> list[dict]:
+    """Alias pair (agreed 2026-11-13, user), for a table that attached by nothing: a claimed name anchor f on column
+    c, and another column c2 of the same table (the same rows) holding a second spelling of that name. dev_011 /
+    dev_014: the line's 'Hàng' writes the 'Ghi tắt' short form on most lines and the 'Tên hàng' full name on the
+    rest; the 9B claims only 'Tên hàng' (product_name; 'Cáp C' is no product code), which alone covers ~50 %.
+    Conditions, against an attached table holding f: c and c2 each unique and unique together (min_unique); c alone
+    covers < ALIAS_NAME_BELOW (user: the name alone does not explain the lines; keeps out stock reports, whose name
+    alone covers ~100 % and which resolve_anchors left out on purpose); c2 alone covers >= ALIAS_OWN_MIN (a real
+    second spelling, not one coincidental match: biz_120's stock report sits at 0.898 with a code column covering
+    0 %); together >= ALIAS_PAIR_MIN. Replayed on the 44 saved 9B states: fires on dev_011 and dev_014 only.
+    Two links, both anchor f: the partner c2 first, pair_with = c, so write_plan's Join has key = c2 and
+    alt_key = c (the claimed name), and write_code's stage 8 takes the name from alt_key."""
+    for f in NAME_ANCHORS:
+        c = e["anchors"].get(f)
+        if c is None:
+            continue
+        k1, u1, _ = values(e["table"], c)
+        if u1 < min_unique or not k1:
+            continue
+        for a in attached:
+            a_col = entries[a["table"]]["anchors"].get(f)
+            if a_col is None:
+                continue
+            a_keys = values(a["table"], a_col)[0]
+            if _coverage(a_keys, k1) >= ALIAS_NAME_BELOW:
+                continue
+            for c2 in groups[e["table"]].first.columns:
+                if not c2 or c2 == c:
+                    continue
+                k2, u2, _ = values(e["table"], c2)
+                if u2 < min_unique or not k2 or _coverage(a_keys, k2) < ALIAS_OWN_MIN:
+                    continue
+                t_keys, t_unique, _ = values.pair(e["table"], c, c2)
+                cov = _coverage(a_keys, t_keys)
+                if t_unique < min_unique or cov < ALIAS_PAIR_MIN:
+                    continue
+                return [{"anchor": f, "column": col, "pair_with": other, "alias": True, "to_table": a["table"],
+                         "to_column": a_col, "coverage": round(cov, 4), "unique": round(t_unique, 4)}
+                        for col, other in ((c2, c), (c, c2))]
+    return []
 
 
 def shop_groups(state: WorkflowState) -> dict[str, explore.TableGroup]:

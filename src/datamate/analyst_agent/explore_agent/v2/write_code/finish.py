@@ -7,9 +7,14 @@ explore_agent.md "Stage 8". Agreed with the user (2026-11-13): every part as the
    accent-insensitively), else the most frequent spelling among the shop's spellings that differ only in accents
    (common.canonical_names); product_key = norm_text of that name. A line with a code keeps its own name.
 2. customer_key = the customer code (blank = walk-in, no key) when the shop has codes, else
-   parse.customer_name_key(name) (phone suffix stripped, walk-in aliases -> None).
+   parse.customer_name_key(name) (phone suffix stripped, walk-in aliases -> None), names differing only in accents
+   merged into their most frequent spelling (name_keys; agreed 2026-11-13, unlike the references).
 3. line_discount when no column holds it: qty x unit_price - line_amount (common.implied_discount).
-4. schema.finalize / validate; manifest: data_end from the README ('Dữ liệu có đến hết dd/mm/yyyy', as the
+4. order_id when the plan maps no order-id column at all (agreed 2026-11-13; rulebook §8 "Bảng không ghi theo đơn":
+   each row is one record): the row's place in the file, '<sheet>#<row>' as dev_012's reference ('T1-2026#10');
+   '<file>/<sheet>#<row>' when the line tables span several files (two files may both have Sheet1 row 10); a csv
+   (no sheet) uses its file name. Never applied when the order id is mapped but blank on some rows (forward fill).
+5. schema.finalize / validate; manifest: data_end from the README ('Dữ liệu có đến hết dd/mm/yyyy', as the
    references), else the last order_date with a warning; no brief (hand-written per shop in the references);
    sources = line tables, joined tables, conversion tables, README.md.
 """
@@ -31,7 +36,9 @@ class FinishReport:
     product_key: dict = field(default_factory=dict)  # how many lines got their key from: code / table / spelling
     names_changed: int = 0  # lines whose product_name became the products table's or the most frequent spelling
     customer_key: str = ""  # 'code' / 'name' / 'none'
+    accent_merged: int = 0  # name keys merged into another spelling differing only in accents
     implied_discount: bool = False
+    order_id_from_rows: bool = False  # no order-id column: one order per row
     data_end: str = ""
     data_end_from: str = ""  # 'README' / 'last order_date (README phrase not found)'
     sources: list[str] = field(default_factory=list)
@@ -84,15 +91,46 @@ def product_identity(lines: pd.DataFrame, plan: SalesLinePlan, joined: Joined, r
                           "none": int((~has_code & ~no_code).sum())}
 
 
+def name_keys(names: pd.Series, report: FinishReport) -> pd.Series:
+    """customer_name_key, then names differing only in accents share one key: the most frequent spelling (by lines)
+    among them, as common.canonical_names does for products. Agreed 2026-11-13 (user, option a; rulebook §3 "hai tên
+    chỉ khác cách viết là cùng một khách"); evidence: biz_108's 57 accent pairs all share one customer code, and
+    dev_014 writes both spellings within one order. Departs from the references (which keep accents)."""
+    keys = names.map(customer_name_key)
+    best = {}
+    for k in keys.dropna().value_counts().index:  # most frequent first
+        best.setdefault(fold_accents(k), k)
+    out = keys.map(lambda k: None if k is None or pd.isna(k) else best[fold_accents(k)])  # pd.NA in string columns
+    report.accent_merged = int(keys.dropna().nunique() - out.dropna().nunique())
+    return out
+
+
 def customer_identity(lines: pd.DataFrame, report: FinishReport) -> None:
     if "customer_code" in lines.columns and lines["customer_code"].notna().any():
         lines["customer_key"] = lines["customer_code"]  # §3: one code = one customer; blank = walk-in
         report.customer_key = "code"
     elif "customer_name" in lines.columns:
-        lines["customer_key"] = lines["customer_name"].map(customer_name_key)
+        lines["customer_key"] = name_keys(lines["customer_name"], report)
         report.customer_key = "name"
     else:
         report.customer_key = "none"
+
+
+def row_order_ids(lines: pd.DataFrame, plan: SalesLinePlan, report: FinishReport) -> None:
+    """One order per row when the plan maps no order-id column (rulebook §8 "Bảng không ghi theo đơn")."""
+    if any(c.schema_column == "order_id" for c in plan.columns):
+        return
+    several_files = lines["source_file"].nunique() > 1
+
+    def place(f, s, r) -> str:
+        where = s if s else f
+        if several_files and s:
+            where = f"{f}/{s}"
+        return f"{where}#{r}"
+
+    lines["order_id"] = [place(f, s, r) for f, s, r in
+                         zip(lines["source_file"], lines["source_sheet"], lines["source_row"])]
+    report.order_id_from_rows = True
 
 
 def sources_of(plan: SalesLinePlan) -> list[str]:
@@ -106,6 +144,7 @@ def finish(lines: pd.DataFrame, plan: SalesLinePlan, joined: Joined, shop_dir: P
     lines = lines.copy()
     product_identity(lines, plan, joined, report)
     customer_identity(lines, report)
+    row_order_ids(lines, plan, report)
     if "line_discount" not in lines.columns and {"qty", "unit_price", "line_amount"} <= set(lines.columns):
         lines["line_discount"] = implied_discount(pd.to_numeric(lines["qty"]), pd.to_numeric(lines["unit_price"]),
                                                   pd.to_numeric(lines["line_amount"]))

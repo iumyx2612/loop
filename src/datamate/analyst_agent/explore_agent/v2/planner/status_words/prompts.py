@@ -58,6 +58,25 @@ Q_BLANK = "For `blank`: which status does an order have when this column names n
 BLANK_WHY = "\nFirst write one short sentence why (reason), then the status (blank)."
 BLANK_REASON = "one short sentence: why, for blank"
 
+# The no-column call (agreed 2026-11-13, user): when neither step 2 nor step 3 found a status column (dev_012's repair
+# book: its Ghi chú holds notes, none naming a status), the blank question is still asked, so the rulebook decides
+# which status an order has when the shop writes none (§8 "Sổ không có cột trạng thái"). The fact only (user: "just
+# state the fact is enough"), never which rulebook row applies; a reason first, as the blank call (BLANK_WHY)
+NO_COLUMN = """A shop records its sales in tables. Each order has one of four statuses.
+
+# The rules for order statuses (from the rulebook)
+{rulebook}
+
+# The four statuses
+{meanings}
+
+# This shop
+This shop's tables have no column holding the order's status.
+
+# Question
+For `blank`: which status does an order have when the shop writes no status for it?
+First write one short sentence why (reason), then the status (blank)."""
+
 # {rulebook}: utils.rulebook_sections; {meanings}, {body}, {question}: nodes
 STATUS_WORDS = """A shop records its sales in tables. One column holds the status of each order, in the shop's own \
 words. Map them to one of four statuses.

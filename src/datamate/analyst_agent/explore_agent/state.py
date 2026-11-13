@@ -118,7 +118,8 @@ class SalesLinePlan(BaseModel):
     statuses: list[StatusWord] = Field(description="every distinct raw status value; [] when there is no status")
     blank_status: Status | None = Field(
         None, description="the status of an order whose status cell is still blank after forward fill (e.g. a status "
-                          "written in a notes column: a blank note = completed); None when that never happens")
+                          "written in a notes column: a blank note = completed), or of every order when the shop has "
+                          "no status column; None when that never happens")
     conversions: list[ConversionSource] = Field(
         default_factory=list,
         description="every place the shop writes its unit conversions (big unit -> base units); [] when it has none. "

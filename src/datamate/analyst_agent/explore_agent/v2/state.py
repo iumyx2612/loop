@@ -39,7 +39,8 @@ class WorkflowState(ShopState):
     anchor_tables: list[dict]
     # Step 3, attach (code): the tables linked to the lines, the lines first (round 0); each {"table", "round",
     # "links": [{"anchor", "column", "to_table", "to_column", "coverage", "unique"}]} = the plan's joins
-    # (+ "pair_with": a code + name pair attached together, attach.PAIRS)
+    # (+ "pair_with": a code + name pair attached together, attach.PAIRS; + "alias": True for a name + its other
+    # spelling, attach._alias_links)
     attached: list[dict]
     # Step 3, resolve_anchors: the claims dropped because another table was chosen for that anchor, {"table",
     # "anchor"}; attach ignores them (resolve_anchors re-attaches without them and rewrites `attached`)
@@ -59,7 +60,8 @@ class WorkflowState(ShopState):
     # [] when there is no status column or no readable reply
     statuses: list[StatusWord]
     # Step 5: the status of an order whose status cell is still blank after forward fill (a leftover blank: on a row
-    # whose order id is filled); None when the column has no leftover blanks (or no answer). The plan's blank_status
+    # whose order id is filled), or of every order when the shop has no status column (5e); None when the column has
+    # no leftover blanks (or no answer). The plan's blank_status
     blank_status: str | None
     # Test knob, not set by the workflow (default True): False = step 5 asks the LLM every word, ignoring the
     # known-word list (runner flag --no-known-words), to measure the LLM where the list knows every word

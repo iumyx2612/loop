@@ -20,8 +20,14 @@ blanks (count, share, two rows) instead of words, the words known or just answer
 note not naming a status is a completed order), which may differ on the final test.
 5d: one StatusWord per word (known and asked alike; all or nothing: with a word unanswered, statuses = []), and
 blank_status (None when there are no leftover blanks or no answer).
-
-Not here: shops without a status column (dev_012, dev_014: status in a notes column steps 2-3 did not find).
+5e: no status column (agreed 2026-11-13, user): when neither step 2 (its open_fields included, which finds a status
+inside a notes column: dev_011 / dev_014) nor step 3's snapshot found one, the blank question is still asked
+(prompts.NO_COLUMN: the rulebook's §8, the meanings, the bare fact "no column holding the order's status"; reason,
+then blank). statuses = []; blank_status = the answer, which write_code's stage 6 gives every line. Runs after every
+step that can find a status column, so shops with one (dev_011, dev_013, dev_014) never reach it. A failed call
+leaves blank_status None, as before. Why: dev_012 (repair book, Ghi chú with notes naming no status) got no status
+at all, so every revenue measure was 0; rulebook §8 "Sổ không có cột trạng thái": a note not naming a status =
+completed.
 """
 import time
 from pathlib import Path
@@ -38,7 +44,7 @@ from src.datamate.analyst_agent.explore_agent.utils import rulebook_sections, si
 from src.datamate.analyst_agent.explore_agent.v2.state import WorkflowState
 from src.datamate.analyst_agent.explore_agent.v2.planner.status_words.prompts import (BLANK_BLOCK, BLANK_NOTE, BLANK_ORDERS,
                                                                               BLANK_REASON, BLANK_WHY, KNOWN_BLOCK,
-                                                                              MEANINGS, Q_BLANK, Q_WORDS,
+                                                                              MEANINGS, NO_COLUMN, Q_BLANK, Q_WORDS,
                                                                               RULEBOOK_SECTIONS, STATUS_WORDS,
                                                                               WORDS_BLOCK)
 from src.datamate.analyst_agent.explore_agent.v2.planner.status_words.words import (StatusColumn, Words, status_column,
@@ -135,6 +141,15 @@ def map_statuses(state: WorkflowState, runtime: Runtime[ExploreContext]) -> dict
     if col is None:
         why = (state.get("missing_columns") or {}).get("status", "no status column found")
         record["skipped"] = f"no status column: {why}"
+        # 5e: still ask what an order with no written status is (the rulebook decides)
+        prompt = NO_COLUMN.format(rulebook=rulebook_sections(runtime.context.rulebook, RULEBOOK_SECTIONS)
+                                  or "(no rulebook)",
+                                  meanings="\n".join(f"- {s}: {m}" for s, m in MEANINGS.items()))
+        blank_reply, call = ask(runtime, blank_schema(), prompt)
+        blank_status = blank_reply.get(BLANK)
+        record["blank_call"] = {**call, "no_status_column": True, "reason": blank_reply.get("reason"),
+                                "blank": blank_status}
+        record["usage"] = call.get("usage") or {}
     else:
         words = status_words(col)
         record.update(column=col.column, table=col.where, source=col.source, order_col=col.order_col,

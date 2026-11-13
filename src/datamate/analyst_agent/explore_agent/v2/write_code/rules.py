@@ -5,7 +5,8 @@ Agreed with the user (2026-11-12), in this order:
    failure, cell null); with an order id, a BLANK order-level cell (ORDER_LEVEL: date, time, status, customer,
    channel, payment, seller) takes the order's first non-blank value (rulebook §8); a different value is never
    overwritten (a conflict, counted); an order with no status word on any line gets plan.blank_status; no order id:
-   each row alone. Return lines are left out of the date spread (rule 2 sets their dates).
+   each row alone. Return lines are left out of the date spread (rule 2 sets their dates). No status column in
+   the plan (agreed 2026-11-13; explore step 5e): every line gets plan.blank_status (None: status stays empty).
 2. return lines: is_return_line = qty < 0 on every shop. When plan.return_lines: return_date = the return line's own
    date, its order_date / order_time = the earliest of the order's sale lines (null when the order has none), and
    every line of an order with a return line is 'returned' (overwrites rule 1, this column only, rulebook §1). When
@@ -196,6 +197,11 @@ def apply_rules(lines: pd.DataFrame, raw_lines: pd.DataFrame, plan: SalesLinePla
             report.blank_status_lines = int(empty.sum())
         else:
             report.no_status_lines = int(empty.sum())
+    elif plan.blank_status:  # no status column: step 5e's answer for an order with no written status
+        lines["status"] = plan.blank_status
+        report.blank_status_lines = len(lines)
+    else:
+        report.no_status_lines = len(lines)
 
     # 2. return lines
     return_rules(lines, plan, report)
