@@ -12,13 +12,14 @@ from pathlib import Path
 
 import pandas as pd
 
-from src.datamate.parse import CHANNELS, PAYMENT_METHODS, STATUS_CANCELLED, STATUS_COMPLETED, STATUS_IN_DELIVERY, norm_text
+from src.datamate.parse import CHANNELS, PAYMENT_METHODS, STATUS_CANCELLED, STATUS_COMPLETED, STATUS_IN_DELIVERY, \
+    fold_accents, norm_text
 
 # §1: orders that count for revenue, order count, best sellers...: not cancelled, not returned; in delivery counts
 VALID_STATUSES = (STATUS_COMPLETED, STATUS_IN_DELIVERY)
 
 MEASURES = ("revenue", "order_count", "avg_order_value", "qty_base", "customer_count",
-            "cancelled_count", "cancel_rate", "unit_price_base", "gross_profit")
+            "cancelled_count", "cancel_rate", "unit_price_base", "gross_profit", "day_count")
 # Columns a measure needs beyond order_date / status / line_amount (always present)
 MEASURE_NEEDS = {"order_count": ["order_id"], "avg_order_value": ["order_id"], "customer_count": ["customer_key"],
                  "cancelled_count": ["order_id"], "cancel_rate": ["order_id"],
@@ -27,11 +28,12 @@ MEASURE_NEEDS = {"order_count": ["order_id"], "avg_order_value": ["order_id"], "
 # Measures on product lines only: Phí phục vụ is not a product (§3)
 PRODUCT_ONLY = ("qty_base", "unit_price_base")
 # Measures that sum or count, so a group missing from one period is 0 there (not unknown)
-ADDITIVE = ("revenue", "order_count", "qty_base", "customer_count", "cancelled_count", "gross_profit")
+ADDITIVE = ("revenue", "order_count", "qty_base", "customer_count", "cancelled_count", "gross_profit", "day_count")
 
 FILTER_COLUMNS = {"product_keys": "product_key", "product_group": "product_group", "customer_keys": "customer_key",
                   "customer_group": "customer_group", "channel": "channel", "payment_method": "payment_method",
-                  "seller": "seller", "shift": "order_time", "size": "product_name", "base_unit": "base_unit"}
+                  "seller": "seller", "shift": "order_time", "size": "product_name", "base_unit": "base_unit",
+                  "order_amount": "order_id"}
 GROUP_COLUMNS = {"product": "product_key", "product_group": "product_group", "customer": "customer_key",
                  "customer_group": "customer_group", "seller": "seller", "channel": "channel",
                  "payment_method": "payment_method", "order": "order_id", "day": "order_date", "week": "order_date",
@@ -127,6 +129,11 @@ def _apply_filters(df: pd.DataFrame, filters: dict) -> pd.DataFrame:
             if str(v).upper() not in ("M", "L"):
                 raise QueryError(f"size must be 'M' or 'L', got {v!r}")
             df = df[df["product_name"].str.strip().str.upper().str.endswith(f"({str(v).upper()})")]
+        elif name == "order_amount":  # rulebook: phiếu có thu tiền vs phiếu bảo hành (an order of 0 đồng)
+            if v not in ("paid", "free"):
+                raise QueryError(f"order_amount must be 'paid' or 'free', got {v!r}")
+            total = df.groupby("order_id")["line_amount"].transform("sum")
+            df = df[total > 0] if v == "paid" else df[total <= 0]
         else:
             raise QueryError(f"unknown filter {name!r}; expected one of {', '.join(FILTER_COLUMNS)}")
     return df
@@ -158,12 +165,17 @@ def _aggregate(df: pd.DataFrame, keys: pd.Series, measure: str) -> pd.Series:
         return g["qty_base"].sum()
     if measure == "order_count":
         return g["order_id"].nunique().astype(float)
+    if measure == "day_count":  # days with at least one order (khách trung thành, thợ chăm chỉ: most days)
+        return g["order_date"].nunique().astype(float)
     if measure == "customer_count":  # walk-in orders have no customer_key and are not customers (§3)
         return g["customer_key"].nunique().astype(float)
     if measure == "cancelled_count":
         return g["order_id"].nunique().astype(float)
     if measure == "avg_order_value":  # money: rounded to the đồng, half up (§3)
-        return (g["line_amount"].sum() / g["order_id"].nunique()).map(_half_up)
+        # rulebook: the average is over orders that took money; a 0-đồng order (warranty ticket) is not counted
+        per_order = df.groupby([keys, df["order_id"]], dropna=True)["line_amount"].sum()
+        paid = (per_order > 0).groupby(level=0).sum()
+        return (g["line_amount"].sum() / paid.reindex(g["line_amount"].sum().index).replace(0, float("nan"))).map(_half_up)
     if measure == "gross_profit":  # §5: revenue − Σ qty × cost price on the sale line (per sale unit)
         # Cost is multiplied per line before summing: each line has its own cost and unit. A service-fee line
         # sells no goods, so its cost is 0 (run_query has already refused product lines without a cost).
@@ -190,7 +202,7 @@ def _labels(df: pd.DataFrame, keys: pd.Series, group_by: str) -> pd.DataFrame:
 
 def _sorted(frame: pd.DataFrame) -> pd.DataFrame:
     """§9: value desc; ties by code asc, no code → by key (the name, or the date for time groups)."""
-    tie = frame["code"].fillna(frame["key"]).astype(str)
+    tie = frame["code"].fillna(frame["key"]).astype(str).map(lambda x: fold_accents(x) or x)  # Đ sorts as D
     order = sorted(range(len(frame)), key=lambda i: (-frame["value"].iat[i] if frame["value"].iat[i] == frame["value"].iat[i]
                                                      else math.inf, tie.iat[i]))
     return frame.iloc[order].reset_index(drop=True)

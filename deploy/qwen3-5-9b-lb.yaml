@@ -1,0 +1,26 @@
+# One local port for every replica: kubectl port-forward reaches ONE pod, and the nodes' NodePort is not reachable from
+# the dev machine, so this tiny proxy runs inside the cluster and opens each connection to svc qwen3-5-9b-loop
+# (kube-proxy spreads those over the replicas). Access: kubectl -n llms-dev port-forward svc/qwen3-5-9b-lb 8000:8000
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: qwen3-5-9b-lb, namespace: llms-dev, labels: {app: qwen3-5-9b-lb}}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: qwen3-5-9b-lb}}
+  template:
+    metadata: {labels: {app: qwen3-5-9b-lb}}
+    spec:
+      imagePullSecrets: [{name: regcred}]
+      containers:
+        - name: socat
+          image: docker.io/alpine/socat:1.8.0.0
+          args: ["-d", "TCP-LISTEN:8000,fork,reuseaddr", "TCP:qwen3-5-9b-loop.llms-dev.svc.cluster.local:8000"]
+          ports: [{containerPort: 8000}]
+          resources:
+            requests: {cpu: "1", memory: 256Mi}
+            limits: {cpu: "4", memory: 1Gi}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: qwen3-5-9b-lb, namespace: llms-dev}
+spec: {selector: {app: qwen3-5-9b-lb}, ports: [{port: 8000, targetPort: 8000}]}

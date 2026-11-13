@@ -1,0 +1,48 @@
+# Extra replicas of qwen3-5-9b-loop (same app label, so svc qwen3-5-9b-loop balances over both) that may also run on the
+# nguyendk-tainted node. Plain vLLM, 1x H100 each, text-only, 262k context. Access: kubectl -n llms-dev port-forward svc/qwen3-5-9b-loop 8000:8000
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: qwen3-5-9b-loop-b, namespace: llms-dev, labels: {app: qwen3-5-9b-loop}}
+spec:
+  replicas: 2
+  selector: {matchLabels: {app: qwen3-5-9b-loop, pool: b}}
+  template:
+    metadata: {labels: {app: qwen3-5-9b-loop, pool: b}}
+    spec:
+      imagePullSecrets: [{name: regcred}, {name: nvcr-secret}]
+      containers:
+        - name: vllm
+          image: docker.io/vllm/vllm-openai:v0.33.0
+          args:
+            - /models/Qwen/Qwen3.5-9B
+            - --served-model-name=Qwen3.5-9B
+            - --port=8000
+            - --max-model-len=262144
+            - --gpu-memory-utilization=0.9
+            - --enable-prefix-caching
+            - --language-model-only
+            - --enable-auto-tool-choice
+            - --tool-call-parser=qwen3_coder
+            - --reasoning-parser=qwen3
+          env: [{name: HF_HUB_OFFLINE, value: "1"}]
+          ports: [{containerPort: 8000}]
+          resources:
+            limits: {nvidia.com/gpu: 1, cpu: "8", memory: 64Gi}
+            requests: {nvidia.com/gpu: 1, cpu: "4", memory: 64Gi}
+          readinessProbe: {httpGet: {path: /health, port: 8000}, periodSeconds: 10}
+          volumeMounts:
+            - {name: models, mountPath: /models, readOnly: true}
+            - {name: shm, mountPath: /dev/shm}
+      volumes:
+        - {name: models, hostPath: {path: /mnt/hps/fp16_models, type: Directory}}
+        - {name: shm, emptyDir: {medium: Memory, sizeLimit: 16Gi}}
+      tolerations: [{key: cuda-13-driver, operator: Equal, value: "true", effect: NoSchedule}, {key: nguyendk, operator: Equal, value: "true", effect: NoSchedule}]
+---
+# NodePort: reach every replica (both deployments) from outside the cluster at <node-ip>:30980
+apiVersion: v1
+kind: Service
+metadata: {name: qwen3-5-9b-loop-np, namespace: llms-dev}
+spec:
+  type: NodePort
+  selector: {app: qwen3-5-9b-loop}
+  ports: [{port: 8000, targetPort: 8000, nodePort: 30980}]

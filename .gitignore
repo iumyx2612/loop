@@ -1,3 +1,8 @@
 __pycache__/
 .env
 .idea
+.venv/
+raw_zips/
+dataset/
+data_std/
+runs/
