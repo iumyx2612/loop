@@ -23,7 +23,7 @@ from run_stage_6 import keyed  # noqa: E402
 import pandas as pd  # noqa: E402
 
 import v2_runner  # noqa: E402
-from src.datamate.analyst_agent.explore_agent.v2.write_code import (apply_rules, apply_stages_1_4, apply_units,  # noqa: E402
+from src.datamate.analyst_agent.write_code import (apply_rules, apply_stages_1_4, apply_units,  # noqa: E402
                                                                      normalize)
 
 COMPARED = {"unit": "label", "base_unit": "label", "unit_factor": "qty", "qty_base": "qty"}

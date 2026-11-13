@@ -182,6 +182,17 @@ table; its columns, with `key` and `factor_format` decided by code; README text 
 found on its first run and fixed (dev_004's README line, the base unit of code-keyed tables). Lesson again: **one
 line per question** found what one question over the whole section missed. A shop can need two sources at once
 (dev_004: a file and a README line).
+*Session 2026-11-13 (the whole-pipeline gaps):* the four gaps of the first whole-pipeline bench, each agreed one at a
+time and built (details under "write_code", "Gaps found by the first whole-pipeline bench"): (1) an order id per row
+when a shop has no order-id column (stage 8, as dev_012's reference); (2) step 5e, the blank question also when
+there is no status column, and stage 6 giving its answer to every line; (3) customer names differing only in accents
+share one key (stage 8, the user's choice over the reference, on the evidence that biz_108's accent pairs share
+codes); (4) attach's alias pairs for dev_011 / dev_014's `Ghi tắt` (two value conditions: the user's "name alone
+< 90 %" and Claude's "partner alone ≥ 25 %"). Method: every change replayed on all 44 saved 9B states without an
+LLM before building, and only the shops it can touch rerun with the model (a full rerun mixes the change with run-to-run
+model noise). Lessons: check which rulebook words are actually settled before calling a reference wrong (§3's "chỉ
+khác cách viết" did not settle accents; the data did); a rule's first version can catch tables left out on purpose
+(stock reports), so replay it on every shop.
 ```
 START → confirm_headers → prepare → filter_rows → choose_line_tables → map_line_columns → find_anchors → attach
       → resolve_anchors → snapshot → report_missing → map_statuses → map_line_kinds → cleaning_inputs
@@ -195,12 +206,16 @@ saved before the filter step), `line_kinds_graph` (step 7), `cleaning_inputs_gra
 without step 7, 6c counts every row), `conversions_graph` (map_conversions, any state after prepare),
 `write_plan_graph` (step 8, no LLM).
 
-**Next** (updated 2026-11-12; the conversions step is done; the work moved on to write_code, see its own "Next" in
-"write_code"; the items below stay open in the background):
-1. dev_014's shared `Khách` column: `shared_recheck` answered "no" for both fields twice (see step 2); options (a)
-   / (b) / (c) written there, not discussed yet.
-2. The other 9B weak spots ("Weak spots of a 9B model"): dev_011 / dev_014 `Ghi tắt` (product_code not claimed, the
-   abbreviation list does not attach); dev_012 `product_name` open (`Làm gì`). (429s: fixed by the host routing.)
+**Next** (updated 2026-11-13; the four whole-pipeline gaps are done, see "write_code"):
+0. **Query-score gap (2026-11-13, paused while the user rewrites the query_agent):** see "Query-score gap: agent
+   conversions vs the references" under write_code. dev_012 first: (a) seller from the mechanics list, (b) "one row =
+   one phiếu"; then the brief. Proposals, not discussed yet.
+1. **dev_014's shared `Khách` column:** `customer_group ← Khách` fills a group from
+   customer names on every line, so customer-group questions are answered instead of abstained.
+   `shared_recheck` answered "no" for both fields twice (see step 2); options (a) / (b) / (c) written there, not
+   discussed yet.
+2. The other 9B weak spots ("Weak spots of a 9B model"): dev_012 `product_name` open (`Làm gì`). (`Ghi tắt`: fixed
+   by attach's alias pairs, 2026-11-13; 429s: fixed by the host routing.)
 3. Conversions leftovers (see "Conversions"): the guard (a missed source as a plan_check problem when the line has
    no `qty_base` or `unit`; user: after the baseline); a value check against a price taken as the factor (not seen
    on the 9B).
@@ -217,7 +232,7 @@ without step 7, 6c counts every row), `conversions_graph` (map_conversions, any 
   sheets, split files); `column_values` / `find_rows` without a sheet also read the split files. Try a tool by
   hand: `scripts/checks/try_explore.py <split> <shop> <tool> key=value...`.
 
-## Step 0: filter the junk rows (built: `v2/planner/filter_rows/`, node `filter_rows`)
+## Step 0: filter the junk rows (built: `v2/filter_rows/`, node `filter_rows`)
 Marks **repeated header rows** (dev_002 repeats its header 420 times inside the data) and **subtotal / footer /
 note rows** (`Cộng ngày 01/05/2025`, `TỔNG THÁNG`, `Ghi chú: số liệu ghi tay`) on every table group, before step 1.
 Why first: step 5's status words would otherwise include the header text, and they add noise to every later check.
@@ -260,7 +275,7 @@ order-id column, so they are step 6.
   with fewer than half the usual filled cells. *Later idea, not built:* code checks whether a label-less number
   equals the sum of the lines since the previous candidate.
 
-## Step 1: choose the line tables (built: `v2/planner/find_line_tables/`, node `choose_line_tables`)
+## Step 1: choose the line tables (built: `v2/find_line_tables/`, node `choose_line_tables`)
 - Options = the table groups with data rows, so month sheets and split files are one option and `line_tables`
   follows from the choice (one `TableRef` per sheet / file). Names (`nodes.option_names`): `X.xlsx [S]`,
   `X.xlsx (17 sheets)`, `X_1.xlsx + X_2026.xlsx (19 sheets)`, `pos.sqlite [chi_tiet_don]`; steps 0, 3 and 5 use the
@@ -272,7 +287,7 @@ order-id column, so they are step 6.
 - **Left out on purpose (agreed):** retry (an unparsable reply leaves `line_tables = []`), adding near-identical
   groups (agreed fix when needed: code adds groups that differ by 1–2 columns), a plausibility check.
 
-## Step 2: map the line columns (built: `v2/planner/column_mapping/`, node `map_line_columns`)
+## Step 2: map the line columns (built: `v2/column_mapping/`, node `map_line_columns`)
 A small agent: subgraph `START → answer ⇄ check → llm_check → shared_recheck → open_fields → END`, run by the
 parent's node (the subgraph's own
 state stays inside; adding the compiled subgraph as a parent node would append the trace twice).
@@ -362,7 +377,7 @@ state stays inside; adding the compiled subgraph as a parent node would append t
     dev_006's constant `IDCuaHang` itself.
   - Not covered: a field the first answer or llm_check mapped wrongly (pass 2 only fills open fields).
 
-## Step 3: fill the open columns from other tables (built in part: `v2/planner/fill_missing_schema/`)
+## Step 3: fill the open columns from other tables (built in part: `v2/fill_missing_schema/`)
 ```
 find_anchors → attach → resolve_anchors → snapshot → resolve (fields; not built)
 ```
@@ -407,6 +422,27 @@ tables' anchors are step 2's mapping. Claims are kept as given; `attach` checks 
   with `pair_with`. Needs find_anchors to claim **both** columns: the 9B claimed only `Tên hàng` on dev_011 /
   dev_014, so the table did not attach (see "Weak spots of a 9B model"). *Not discussed yet:* for the later fill, `product_name` should be the matched row's full name,
   the abbreviation must not become `product_code`, and the phone shops' `base_unit` is in no column.
+- **Alias pairs** (agreed 2026-11-13, user; built: `attach._alias_links`). Why: on dev_011 / dev_014 the line's
+  `Hàng` writes the `Ghi tắt` short form on 90 % / 80 % of lines and the `Tên hàng` full name on the rest (every
+  cell is one or the other); the 9B claims only `Tên hàng` (product_name), rightly not calling `Cáp C` a product
+  code, so the code + name pair never ran and the sheet stayed out (no full names, no `product_group`). The README
+  explains the sheet only in its intro and Quy ước, which no prompt shows for that table. The rule (code, values):
+  a table that attached by **nothing**, with a claimed name anchor (`product_name` / `customer_name`) on column c,
+  tries each other column c2 **of the same table** (a pair is two cells of one row): c and c2 each unique and
+  unique together (`MIN_UNIQUE`); **c alone covers < 90 %** of the line's values (user's condition: the name does
+  not already explain the lines); **c2 alone covers ≥ 25 %** (Claude's condition: a real second spelling, not one
+  coincidental match); together ≥ 90 %. Two links, both of the name anchor, partner first, `pair_with` = the other,
+  `"alias": True`; so write_plan's Join is `key = Ghi tắt`, `alt_key = Tên hàng`, and stage 8 takes the full name
+  from `alt_key` (no change there). `product_code` stays empty, as in the reference.
+  - Snapshot: both alias columns count as link columns (the second as `<anchor> (other spelling)`), so a
+    `product_code` answer on the short forms is a shared column, retried, then failed by `moved_onto_taken`.
+  - Replayed on the 44 saved 9B states (no LLM): the first version (no two coverage conditions) also fired on the
+    stock reports of biz_106, biz_128, dev_003 (name alone ≈ 100 %, `Mã hàng` adds nothing; resolve_anchors left
+    them out on purpose); with the user's condition alone, biz_108 / 119 / 120 stock reports sit at 0.886–0.898
+    (a thin margin a single coincidental match could cross); with both, it fires on dev_011 and dev_014 only.
+  - Known miss (not built): a name alone covering ≥ 50 % attaches the table by the name only, so the pair is never
+    tried and short-form lines stay unmatched (dev_014's `Tên hàng` is at 0.50, just under). Today's behaviour, not
+    a regression.
 - By design conversion lists and partial debt / returns lists do not attach.
 - Output `state["attached"]`: the lines (round 0), then `{"table", "round", "links": [{"anchor", "column",
   "to_table", "to_column", "coverage", "unique", "pair_with"?}]}` = the plan's joins. Inputs also
@@ -472,7 +508,7 @@ candidates agree in values.
 - Step 2 with no line tables leaves every fillable field "failed"; step 3 then has nothing to attach to (user: the
   data is then not in a line file; counterpoint left open).
 
-## Step 4: report missing columns (built: `v2/planner/missing_columns/`, node `report_missing`, code only)
+## Step 4: report missing columns (built: `v2/missing_columns/`, node `report_missing`, code only)
 - **Found** (agreed) = step 2 mapped it, or an attached table filled it in snapshot. **Only `MAPPABLE` fields can be
   missing** (agreed). Output `state["missing_columns"]` = `{field: reason}` (user: the reason stays with the field;
   the plan's `missing_columns` = its keys). Reason codes (agreed): `line_only`, `failed_check`, `unreached`,
@@ -481,15 +517,27 @@ candidates agree in values.
   `unit` without a unit column (biz_128, dev_007, phone shops), `base_unit` (waits for conversions), only on shops
   with product lines.
 
-## Step 5: status words (built: `v2/planner/status_words/`, node `map_statuses`; every part agreed with the user)
+## Step 5: status words (built: `v2/status_words/`, node `map_statuses`; every part agreed with the user)
 Output: `statuses` (one `StatusWord` per raw word) and `blank_status`, both written by `map_statuses`.
 - **5a, the column** (code, `words.status_column`): step 2's `status` (a notes column holding statuses is found by
   step 2's `open_fields`), else the first snapshot table that filled it. No status column → step 5 skips the shop
   with the reason: no statuses, no `blank_status`.
-  - **Open (not discussed yet):** dev_012 (repair tickets, one per row, no ticket code): `Ghi chú` holds notes, no
-    status (`bảo hành`, `khách chờ lấy liền`, `hẹn chiều lấy` ...); the reference sets every ticket completed
-    (rulebook §8, "Sổ không có cột trạng thái": a note not naming a status = completed). The plan says nothing, so
-    the converter must default to completed; option: no status column → `blank_status` from the same §8 question.
+  - **5e, no status column (agreed 2026-11-13, user; built).** dev_012 (repair tickets, one per row, no ticket
+    code): `Ghi chú` holds notes naming no status (all 71 distinct: `bảo hành`, `khách chờ lấy liền`, `hẹn chiều
+    lấy` ...), so step 2 rightly maps no status; the reference sets every ticket completed (rulebook §8 "Sổ không
+    có cột trạng thái: trạng thái đơn ghi ở cột Ghi chú. Ghi chú không nhắc trạng thái là đơn hoàn thành"). Before,
+    the node skipped the shop: no status on any line, every revenue measure 0. Now, when `status_column` is None,
+    `map_statuses` still asks the blank question (`prompts.NO_COLUMN`: §8 quoted, the four meanings, **the bare
+    fact** "This shop's tables have no column holding the order's status" (user: just state the fact), the question
+    "which status does an order have when the shop writes no status for it?", reason first, then `blank`);
+    `statuses = []`, `blank_status` = the answer; write_code stage 6 gives it to every line. A failed call leaves
+    `blank_status` None (unchanged). Trace: `blank_call` with `no_status_column: true`.
+    - **Why after every column step** (user's check): `status_column` is None only when step 2 (incl. `open_fields`)
+      and step 3's snapshot both found none, so shops with a status column (dev_011 / dev_014 `Ghi chú` found by
+      `open_fields`, dev_013 by the first answer) never reach 5e: same prompts, same answers. The row's first half
+      (status written in Ghi chú) stays step 2's job.
+    - Rejected (Claude's, user agreed): letting `open_fields` take dev_012's `Ghi chú` as the status column (71 non-
+      status notes for the words call to map, and a `status` column holding no statuses).
 - **5b, the words** (code, `words.status_words`): distinct stripped non-blank values over the group's data rows,
   with counts and each word's first row.
 - **Hybrid** (user; replaced "map_status answer key only"): a word in the known-word list (`parse.STATUS_MAP`,
@@ -540,7 +588,7 @@ Output: `statuses` (one `StatusWord` per raw word) and `blank_status`, both writ
       the row needs the shop's facts, plus a long-input call). Finding against "give the model only the rulebook
       part": in step 7 a question with only the rulebook rows misled the 9B (see step 7).
 
-## Step 6: cleaning inputs (built: code-only node `cleaning_inputs` in `v2/planner/cleaning_inputs/`)
+## Step 6: cleaning inputs (built: code-only node `cleaning_inputs` in `v2/cleaning_inputs/`)
 **Hybrid** (user): what needs no LLM is pure code. Forward fill, return lines and duplicates are one code-only node
 `cleaning_inputs` (order inside: 6b → 6a → 6c); service-fee / non-revenue rows (step 7) are their own node **before it**
 (agreed 2026-11-11: 6c leaves step 7's not-revenue rows out; step 7 reads no step-6 output).
@@ -621,7 +669,7 @@ vs 114: the extra ones are duplicate return lines).
   (`line_kinds.candidates.products_table_names`), else the code, as step 7 names them; compared by `value_key`. Trace:
   `duplicates.not_revenue_rows`.
 
-## Step 7: service-fee / non-revenue rows (agreed; built: `v2/planner/line_kinds/`, node `map_line_kinds`)
+## Step 7: service-fee / non-revenue rows (agreed; built: `v2/line_kinds/`, node `map_line_kinds`)
 *Renumbered (user, 2026-11-11): was 6e. The node runs **before** `cleaning_inputs` (step 6), whose 6c reads its
 `non_revenue_names`; the numbers follow the order the steps were designed in, not the graph order.*
 **What it fills:** two plan lists of product-name values, not a column. `service_fee_names`: rows kept as revenue
@@ -691,7 +739,7 @@ but not an item (`line_kind = "service_fee"`); `non_revenue_names`: rows that ar
 - Earlier, not taken: a known-word list (`Phí phục vụ`, `Voucher` ...), as step 5's hybrid; these are plain words
   an LLM reads, not dataset conventions like `Đang giao dịch`.
 
-## Step 8: put the plan together (built: `v2/planner/write_plan/`, node `write_plan`, code only)
+## Step 8: put the plan together (built: `v2/write_plan/`, node `write_plan`, code only)
 Agreed with the user (2026-11-11): 8a `unmapped` by code; `extra_attributes` postponed (`[]`: the schema has no
 columns for them yet); odd structures (dev_002 toppings, dev_012 `Xe`) postponed (agent-mode candidates); then one
 code node puts the `SalesLinePlan` together and runs `plan_check` as the guard (problems in the trace, no retry).
@@ -753,7 +801,7 @@ code node puts the `SalesLinePlan` together and runs `plan_check` as the guard (
 - `write_plan` takes `state["conversions"]`; a state without it gets `[]` + a note (a state saved before the step).
 - *Not discussed yet:* a missed source as a `plan_check` problem when the line lacks `qty_base` or `unit` (the factor
   or unit has no other source), only a warning otherwise (the guard, after the baseline: user).
-- **Finding the sources** (node `map_conversions` in `v2/planner/conversions/`, right before `write_plan`: later parts need
+- **Finding the sources** (node `map_conversions` in `v2/conversions/`, right before `write_plan`: later parts need
   step 2's mapping and step 3's tables; runner `run_conversions_v2.py`, partial graph `conversions_graph`). Parts, one
   at a time:
   1. **README list: code** (agreed 2026-11-12): `common.readme_conversions` finds ≥ 1 row → `readme_list`, no LLM
@@ -834,8 +882,9 @@ cannot see. Proposed, not discussed: a `run_and_check` check for lines whose `un
 ## Weak spots of a 9B model (qwen3.5-9b; each marked open or fixed)
 Findings from whole runs of the v2 graph on the 9B target model, compared with the 27B. `plan_check` does not see
 these: they are wrong meanings, not wrong structure.
-- **Step 3 find_anchors (dev_011, dev_014), open:** the 9B does not claim `Ghi tắt` as product_code in `[Ghi tắt]`, so
-  there is no code + name pair; `Tên hàng` alone covers too few lines and attach leaves the table out. Lost: the
+- **Step 3 find_anchors (dev_011, dev_014), fixed in attach (2026-11-13, alias pairs):** the 9B does not claim `Ghi
+  tắt` as product_code in `[Ghi tắt]` (right: a short form is no code), so there is no code + name pair; `Tên hàng`
+  alone covers too few lines and attach left the table out. Lost: the
   `alt_key` join, product_code / product_group, and names for lines written as a short code. Other wrong anchors
   (supplier as customer_name, a date as order_id in dev_014's SoNo / ThuMayCu) are harmless: attach rejects them.
 - **Step 2, dev_014, open:** `customer_group ← Khách`, the same raw column as `customer_name`; `shared_recheck` does not
@@ -865,21 +914,24 @@ these: they are wrong meanings, not wrong structure.
   `ĐVT` the second time, `Giá bán` the first), the 11 right ones kept. Not taken: asking the base unit in its own
   call.
 
-## write_code (started 2026-11-12; code in `v2/write_code/`)
-Turns a `SalesLinePlan` into sales_lines. Recorded here for now (user) until it gets its own file.
+## write_code (started 2026-11-12; code in `src/datamate/analyst_agent/write_code/`)
+Turns a `SalesLinePlan` into sales_lines. Recorded here for now (user) until it gets its own file. Moved out of
+`explore_agent/v2/` to sit beside `explore_agent/` under `analyst_agent/` (user, 2026-11-13): it is the analyst
+agent's next stage, not an explore step. Import: `from src.datamate.analyst_agent.write_code import ...`.
 
 *Session 2026-11-12 (write_code):* the plan schema looked at with a filled example (biz_122); the shape agreed (a
 fixed no-LLM pipeline + an LLM only filling parameters of predefined functions for leftovers); stages 1–4 built
 (`header_rows` added to the plan); stage 5 designed part by part and built, year-less dates included; the step
-folders moved under `v2/planner/` by the user (imports updated).
+folders moved under `v2/planner/` by the user (imports updated; moved back up to `v2/` on 2026-11-13, user, once write_code left `v2/`).
 
 **Next (write_code):**
 1. **Stage 6** (rules, see "Stage 6" below): every rule agreed and built (`write_code/rules.py`, runner
    `scripts/write_code/run_stage_6.py`); waiting for the user's run on train + public test.
-2. Stage 7 built and run (2026-11-13); open: the no-unit gap of the phone shops (options (a) / (b) under "Stage 7").
-   Stage 8 built and benched (2026-11-13). **Next:** the gaps under "Gaps found by the first whole-pipeline
-   bench" (order id per row, dev_012 status, the customer-accent decision, `Ghi tắt`). Earlier note: `unit` when the shop has no unit column (biz_128, dev_007: the reference takes the catalog's base unit;
-   the phone shops dev_011 / 014: a fixed `cái` / `chiếc`, a known plan gap); conversions → `unit_factor`, `qty_base`.
+2. Stage 7 built and run (2026-11-13); open: **the no-unit gap of the phone shops** (options (a) / (b) under
+   "Stage 7", not decided). Stage 8 built and benched (2026-11-13); the four gaps under "Gaps found by the first
+   whole-pipeline bench" all done (2026-11-13). Left on the benched shops: dev_014 `customer_group ← Khách` (explore
+   "Next" 1), the phone shops' unit (above), dev_012's customer (the licence plate inside `Xe`, an odd structure,
+   postponed).
 3. The LLM part (predefined functions, the LLM fills parameters): designed when a shop gives a leftover.
 4. Postponed: dev_002 toppings inside the drink's cell (the reference splits them into extra lines); the
    `channel` / `payment_method` plan gap.
@@ -1012,11 +1064,10 @@ folders moved under `v2/planner/` by the user (imports updated).
     `order_date` (counted); rule 2 changes only the return lines' dates, the sale lines keep theirs (the references
     set every line to the earliest sale date; the same wherever an order's sale lines agree); conflicts compared by
     `value_key` (a name with and without accents is not a conflict; nicknames like `Chú Quân` / `Lý Hoàng Quân` are).
-    **Gap:** a shop with no status column (dev_012) gets no `status` at all; the reference sets completed (step 5a's
-    open point: the plan has no `blank_status` for it). The runner calls the
+    A shop with no status column (dev_012) gets `blank_status` on every line (step 5e, 2026-11-13). The runner calls the
     stages one after another; `pipeline.py` still holds stages 1–4 only.
-  - *Not discussed yet:* dev_014 (no customer codes) keeps both spellings of a name within an order; whether
-    `customer_name_key` folds accents decides if `customer_key` splits that customer in two.
+  - dev_014 (no customer codes) keeps both spellings of a name within an order; stage 8's `name_keys` gives them
+    one `customer_key` (gap 3, 2026-11-13).
   - *Not discussed yet (explore step 5):* the blank block tells the LLM "each of these rows has its order id written,
     so the blank is not a later line of an order repeating the order's first line"; false for a shop writing the
     order id on every line (dev_013's Voucher / Phí ship lines are counted as leftover blanks). The answer
@@ -1067,8 +1118,10 @@ folders moved under `v2/planner/` by the user (imports updated).
       quantity of the products the noun names" (`điện thoại` → the phone groups, `máy cũ` → that group), the unit
       word meaning pieces. Nothing invented in the data (§7 holds); a rule in the query_agent, not the converter
       (Claude's lean).
-- **Stage 8, derived columns and finishing** (being designed, 2026-11-13). Parts: (1) product identity, (2)
-  `customer_key` = the customer code, else `customer_name_key(name)` (every reference; rulebook §3), (3)
+- **Stage 8, derived columns and finishing** (built 2026-11-13). Parts: (1) product identity, (2)
+  `customer_key` = the customer code, else `customer_name_key(name)` with names differing only in accents merged
+  (`name_keys`, gap 3; the references keep accents), (2b) `order_id` per row when the plan maps no order-id column
+  (`row_order_ids`, gap 1), (3)
   `line_discount` when no column holds it = `qty × unit_price − line_amount` (`implied_discount`, every reference),
   (4) `finalize` / `validate`, write `sales_lines.parquet` + `manifest.json` to `data_std_agent/`, bench. The bench
   compares the sets of `product_key` / `customer_key` with the reference, so keys are built as the references do.
@@ -1090,31 +1143,86 @@ folders moved under `v2/planner/` by the user (imports updated).
     first), else `key`; no-code lines that join no row take the most frequent spelling among themselves;
     `customer_key` by code when the shop's lines carry any customer code; `line_discount` implied only when no
     column is mapped and qty, unit_price, line_amount all are.
-- **Gaps found by the first whole-pipeline bench** (2026-11-13, 9B plans; recorded, none decided yet; suggested
-  order: 1, 2, then 3 needs the user's call, 4 stays with the 9B weak spots):
-  1. **No order id → no `order_id`** (dev_012, biz_107, 113, 126). The query_agent counts orders as distinct
-     `order_id`, so every "bao nhiêu đơn / phiếu" there is 0. Rulebook §8 "Bảng không ghi theo đơn: mỗi dòng là một
-     lần ghi"; Sửa xe "mỗi dòng sổ sửa xe là một lượt xe (một phiếu)". *Proposal (Claude's, not discussed):* stage 8
-     builds `order_id` = sheet + row when no order id is mapped, as dev_012's reference (`T1-2026#10`); code only.
-  2. **No status column → no `status`** (dev_012; step 5a's open point). Revenue counts only completed /
-     in_delivery lines, so every revenue measure on such a shop is 0. Rulebook §8 "Sổ không có cột trạng thái …
-     Ghi chú không nhắc trạng thái là đơn hoàn thành". *Proposal (not discussed):* step 5 asks its blank question
-     also when there is no status column (the plan gets `blank_status`), and stage 6 gives it to every line.
+- **Gaps found by the first whole-pipeline bench** (2026-11-13, 9B plans; all four agreed and built the same day,
+  one at a time; every change replayed on the 44 saved states first, and the bench showed no other shop moved):
+  1. **No order id → no `order_id`** (dev_012, biz_107, 113, 126). The manifest then lists `order_id` as missing
+     and the query_agent abstains (`NoData`) on order counts, average order value and cancellations. Rulebook §8
+     "Bảng không ghi theo đơn: mỗi dòng là một lần ghi"; Sửa xe "mỗi dòng sổ sửa xe là một lượt xe (một phiếu)".
+     **Agreed (user, 2026-11-13), built** (`finish.row_order_ids`, stage 8, code only, no plan change): (1) when the
+     plan maps no order-id column, each line's `order_id` = its row's place in the file, as dev_012's reference;
+     safe as the last stage since stage 6 already treats each row alone without an order id; (2) **only** when the
+     whole shop has no order-id column, never for an order id mapped but blank on some rows (continuation lines:
+     forward fill; orphans above the first order stay null); (3) format as the reference: `<sheet>#<row>`
+     (`T1-2026#10`); `<file>/<sheet>#<row>` when the line tables span several files; a csv (no sheet) uses its file
+     name. Runner line: `order_id: one per row`.
+  2. **No status column → no `status`** (dev_012). Revenue counts only completed / in_delivery lines, so every
+     revenue measure on such a shop was 0 (answered, −1). **Agreed (user, 2026-11-13), built:** step 5e (see step
+     5) asks the blank question with no column; stage 6 (`rules.apply_rules`): no status column in the plan →
+     every line gets `blank_status` (None: status stays empty, counted).
   3. **Customer names differing only by accents** (dev_014: 13 extra `customer_key`, 69 orders with two keys).
      Lines of one order write `Đào Bình Hoàng` / `Dao Binh Hoang`; `customer_name_key` keeps accents and stage 6
      fills blanks only (agreed). The reference hides it inside an order (phone_shop's `per_order` overwrites), but
      its own keys still hold 61 pairs differing only by accents. Rulebook §3: names differing only in spelling are
-     one customer. *Options (not discussed):* (a) fold accents in the name key (e.g. the most frequent spelling per
-     accent-folded name, as products): follows §3 more closely than the reference, the bench then disagrees with the
-     reference on those pairs; (b) keep matching the reference.
-  4. **dev_011 / dev_014 `Ghi tắt` not resolved** (the 9B weak spot of step 3: the abbreviation column is not
-     claimed, so no code + name join): `CL 9D` and `Kính cường lực 9D` count as two products, `product_group` (máy
-     mới / máy cũ / phụ kiện) is missing. Costs product and group questions there; the fix is in the explore step.
+     one customer. **Agreed (user, 2026-11-13): option (a), built** (`finish.name_keys`, stage 8, name-keyed shops
+     only): `customer_name_key`, then names differing only in accents share one key, the most frequent spelling by
+     lines (as `canonical_names` for products); `customer_name` stays as written. Rejected: (b) the reference's
+     per-order first name (keeps accent pairs as two customers across orders). §3 reads "hai tên chỉ khác cách viết
+     là cùng một khách, hai tên khác chữ … là hai khách": whether a missing accent is "cách viết" or "khác chữ" is
+     not settled by the text (the references, `parse.fold_accents`' docstring, read it as two names). **Evidence
+     (no LLM):** biz_108's 57 accent pairs all share one customer code (`Lê Đạt Hiếu` / `Le Dat Hieu` = KH0253), so
+     the dataset writes one person both ways; dev_014 writes both spellings within one order. No train shop without
+     codes has an accent pair, so the train answers cannot check it. On dev_014: 1,045 → 984 keys. Expected bench
+     effect: `customer_keys` lists the reference's 61 accented / unaccented duplicates as missing (the reference, not
+     us, differs there). Risk: two real people whose names differ only by a tone mark (`Lan` / `Lân`) become one.
+  4. **dev_011 / dev_014 `Ghi tắt` not resolved**: `CL 9D` and `Kính cường lực 9D` count as two products,
+     `product_group` (máy mới / máy cũ / phụ kiện) is missing. **Agreed (user, 2026-11-13), built:** attach's alias
+     pairs (step 3, "attach"); `product_code` is not needed (the reference leaves it empty, `product_key` = the full
+     name).
   - No effect on answers (left as they are): `line_no` not mapped (step 2, user's decision); dev_009
     `line_discount` empty (no qty column; the reference writes 0); dev_011 / dev_014 order ids `1` vs the
     reference's `STT1`; dev_002 toppings (postponed); the phone shops' unit (see "Stage 7").
 - **Plan gap found:** `channel` / `payment_method` have no word mapping in the plan (only `parse.map_channel` /
   `map_payment`'s fixed lists); a new word on an unseen shop becomes None.
+
+### Query-score gap: agent conversions vs the references (findings 2026-11-13; user: "document these findings")
+The query_agent (9B) run on `data_std_agent/` scored 0.611 on public test, the same agent on `data_std/` 0.728.
+Scored per question against a near-key (`runs/trick/submission.jsonl`, Sonnet, 0.99 on public test), with
+`grading.is_correct`, abstain = 0: the gap is 119 points, **~37 from the data, ~82 from the query-agent run itself**.
+- **Data identical on 9 shops** (row by row on `source_*`, every answer column): dev_001, 003, 004, 005, 007, 008, 010,
+  and dev_009 / 013 apart from the brief; dev_006 differs only in `seller` (and the sqlite `source_row` offset). The 7
+  identical shops still lost 60 points, all in the reference run's favour: 45 recursion-limit errors, ≥ 26 questions
+  where the tool output held the right value and the verify / finalize step abstained, 2 dates typed `string`. That
+  part is query_agent work (its rewrite is under way), not conversion.
+- **What the data costs, per cause** (points against the key):
+  | Cause | Points | Shops |
+  |---|---|---|
+  | No `brief` in the agent's manifest | ~16 | dev_012 13, dev_014 2, dev_013 1 |
+  | Seller not resolved to full names | ~10 | dev_012 7 (nicknames `Đạt` / `A.Đạt` / `a Đạt`), dev_006 3 (`NV00x`) |
+  | dev_002 toppings (postponed) | 7 | cup counts by size, top-3 order |
+  | Product groups / units of the phone shops | ~4 | dev_011, dev_014 ("máy, không kể phụ kiện") |
+  | dev_012 licence plate inside `Xe` (postponed) | 1 | dev_012 |
+  dev_014's `customer_group ← Khách` cost nothing in this run.
+- **The brief** = `manifest["brief"]`, hand-written lines in the reference converters (dev_009, 011, 012, 013, 014),
+  put into every query prompt (`query_agent/agent.py` `shop_brief`); `write_code/finish.py` writes none ("no brief",
+  stage 8). What it carries: what one row is in the shop's words (dev_012 "one order = one ticket (phiếu, lượt xe)"),
+  which field holds what (seller = thợ, customer = biển số), and what is not in the sales lines. Without it the 9B
+  answered "phiếu sửa xe are not in the sales table" though the rulebook has a Sửa xe section: it cannot tell the shop
+  is that case. **The reference briefs are not all right:** they call commissions (dev_012) and trade-ins (dev_011 /
+  014) OUT OF SCOPE, but the key answers both.
+  - *Proposal (Claude's, not discussed yet):* a mostly-code brief from the plan: (1) what one row is = the README
+    intro's sentence saying it (one small 9B call picking the sentence, or quoted by code); (2) per mapped field, its
+    raw column's README meaning (code); (3) what is not in the sales lines = step 8a's `unmapped` (code). Format to
+    agree with the query_agent v2 `scope_check`, which reads the manifest.
+- **dev_012 (−21 of the 119; reference run 27, agent run 6, of 50 questions).** User: worth fixing, in a way that
+  touches no other shop. *Proposals (Claude's, not discussed yet), in this order:*
+  - (a) **Seller from `DanhSachTho.xlsx`:** `seller` as a step 3 anchor (an open point of step 3, with biz_123 and
+    dev_006's `nhan_vien`); exact value match (dev_006's codes), else a code rule for short names: the line's value
+    without a short title prefix (`A.`, `a `) = the **last word** of the table's full name, accents ignored; guards:
+    last words unique in the table, ≥ 90 % of line values matched. Replayed on the 44 saved states before building
+    (expected: dev_012, dev_006; biz_123 to look at). Worth 7 + dev_006's 3, and needed by 6 thợ questions of (b).
+  - (b) **"One row = one phiếu"** (the brief's first line), only when the shop has no order-id column (the condition
+    of gap 1: dev_012, biz_107, 113, 126), from the README's sentence for what a row is. ~13 points.
+  - (c) The licence plate inside `Xe` (customer = vehicle): 1 point here; stays postponed (value inside a cell).
 
 ### Stages 1–4 (built: `write_code/tables.py`, `joins.py`, `pipeline.py`; runner `scripts/write_code/run_stages_1_4.py`)
 - **`SalesLinePlan.header_rows`** (new plan field, from `state["header_rows"]`, filled by `write_plan`): the plan
@@ -1160,6 +1268,17 @@ rebuilds the summaries. Put the run folder **before** `--shops` (it swallows a f
   `-v2-line-kinds/`), `run_cleaning_inputs_v2.py` (no LLM; 6a–6c on any state after step 2, after step 7 for the
   not-revenue skip → `-v2-cleaning/`), `run_conversions_v2.py` (map_conversions on any state after prepare →
   `-v2-conversions/`), `run_write_plan_v2.py` (no LLM; step 8 → `-v2-plan/`).
+- **Saved 9B baseline** (`runs/explore/v2/9B/<split>/`, folders renamed by the user; 2026-11-13): the current plans
+  are in **`step_7B_conversion`** (states with `conversions`; `run_stage_8.py`'s `plan_of` takes them from the state
+  when the saved plan predates the step). **`step_8_write_plan` is older (11-11, no conversions)**: running stage 8 on
+  it drops every conversion source (unit_factor / qty_base / unit empty on the conversion shops). Exceptions written
+  since: dev_012 in `step_8_write_plan` (step 5e's `blank_status`, from a state with conversions), dev_011 / dev_014 in
+  their new `-v2-full` run (alias pairs). Stage 8 order: `step_7B_conversion` for all, then the exceptions (each run
+  overwrites its shops in `data_std_agent/`).
+- **Rerun only what a change can touch**: a code-only change (write_code, attach) is replayed on every saved state
+  with no LLM; the model is rerun only on the shops whose step input changed (and every later step of those shops:
+  `run_explore_v2.py` when attach changes, since snapshot, step 7, conversions and write_plan read `attached`).
+  A full LLM rerun mixes the change with run-to-run model noise.
 - Checks (`scripts/checks/`, no LLM): `check_plan_check.py`, `check_v2_line_tables.py` (step 1), `check_anchors.py`
   (step 3 by values), `check_filter.py` (step 0 vs the `SUBTOTAL` answer key + a fake model), `check_readme_headers.py`,
   `check_shared_columns.py <run folder>...` (llm_check / snapshot shared-column checks replayed on saved runs),
@@ -1190,38 +1309,38 @@ explore_agent/
     │                     forward_fill_columns, return_lines, notes (6); service_fee_names, non_revenue_names (7);
     │                     conversions (not built); plan, plan_problems (8)
     ├── utils.py          call_structured, dump_state / load_state
-    ├── planner/          the explore steps (0-8) that write the SalesLinePlan
-    │   ├── filter_rows/      step 0: rows.py (find_rows, pattern_key, pattern_regex, row_text, DENSE), nodes.py
-    │   │                     (filter_rows, filter_group, verdict_schema), prompts.py
-    │   ├── find_line_tables/ step 1: nodes.py (choose_line_tables, option_names, line_table_candidates), prompts.py
-    │   ├── column_mapping/   step 2: agent.py (subgraph + map_line_columns), nodes.py (answer, check, llm_check,
-    │   │                     shared_recheck, open_fields + OPEN_FIELDS / open_field_candidates, ASKED,
-    │   │                     line_columns_schema, line_tables_of, table_text, readme_meanings_text), checks.py,
-    │   │                     amounts.py, state.py, prompts.py (COLUMN_MEANINGS, NOT_HERE, ...)
-    │   ├── fill_missing_schema/ step 3: anchors.py (ANCHOR_MAP), nodes.py (fields_to_fill, named_groups,
-    │   │                     other_groups, table_snapshot), find_anchors/, attach.py, anchor_resolve/, snapshot/
-    │   ├── missing_columns/  step 4: nodes.py (report_missing, KNOWN_GAPS)
-    │   ├── status_words/     step 5: words.py (status_column, status_words, leftover blanks), nodes.py (map_statuses,
-    │   │                     KNOWN, status_message, status_schema), prompts.py (STATUS_WORDS, MEANINGS, blocks)
-    │   ├── cleaning_inputs/  step 6: return_lines.py (return_lines, problems), forward_fill.py (ORDER_LEVEL,
-    │   │                     forward_fill, problems), duplicates.py (duplicates, row_name, note), nodes.py
-    │   │                     (cleaning_inputs: 6b, then 6a with 6b's rows, then 6c without step 7's not-revenue rows)
-    │   ├── line_kinds/       step 7: candidates.py (find_candidates, TOP_K, UNUSUAL), nodes.py (map_line_kinds,
-    │   │                     rule_rows, line_kinds_schema), prompts.py (LINE_KINDS, KINDS, RULE_ROWS)
-    │   ├── conversions/      map_conversions: nodes.py (map_conversions, readme_sources, last_section, section_lines,
-    │   │                     writes_schema,
-    │   │                     choose_table, table_option_text, table_schema, map_table, columns_schema,
-    │   │                     line_product_keys, grid_rows, readme_rows, rows_schema), prompts.py (README_LINE,
-    │   │                     TABLE_CHOICE, TABLE_COLUMNS, README_ROWS)
-    │   └── write_plan/       step 8: nodes.py (write_plan, build_plan, table_refs, CONVERSIONS_NOTE), unmapped.py
-    │                         (unmapped, what_it_holds)
-    └── write_code/       plan → sales_lines: tables.py (stage 1: read_table, read_line_tables), joins.py (stage 3:
-                          apply_joins, row pointers), pipeline.py (stages 1–4: apply_stages_1_4, Applied),
-                          normalize.py (stage 5: KINDS, PARSERS, normalize, ColumnReport), rules.py (stage 6:
-                          apply_rules, RulesReport), units.py (stage 7: apply_units, Lookup, UnitsReport),
-                          finish.py (stage 8: finish, write, FinishReport)
+    ├── filter_rows/      step 0: rows.py (find_rows, pattern_key, pattern_regex, row_text, DENSE), nodes.py
+    │                     (filter_rows, filter_group, verdict_schema), prompts.py
+    ├── find_line_tables/ step 1: nodes.py (choose_line_tables, option_names, line_table_candidates), prompts.py
+    ├── column_mapping/   step 2: agent.py (subgraph + map_line_columns), nodes.py (answer, check, llm_check,
+    │                     shared_recheck, open_fields + OPEN_FIELDS / open_field_candidates, ASKED,
+    │                     line_columns_schema, line_tables_of, table_text, readme_meanings_text), checks.py,
+    │                     amounts.py, state.py, prompts.py (COLUMN_MEANINGS, NOT_HERE, ...)
+    ├── fill_missing_schema/ step 3: anchors.py (ANCHOR_MAP), nodes.py (fields_to_fill, named_groups,
+    │                     other_groups, table_snapshot), find_anchors/, attach.py, anchor_resolve/, snapshot/
+    ├── missing_columns/  step 4: nodes.py (report_missing, KNOWN_GAPS)
+    ├── status_words/     step 5: words.py (status_column, status_words, leftover blanks), nodes.py (map_statuses,
+    │                     KNOWN, status_message, status_schema), prompts.py (STATUS_WORDS, MEANINGS, blocks)
+    ├── cleaning_inputs/  step 6: return_lines.py (return_lines, problems), forward_fill.py (ORDER_LEVEL,
+    │                     forward_fill, problems), duplicates.py (duplicates, row_name, note), nodes.py
+    │                     (cleaning_inputs: 6b, then 6a with 6b's rows, then 6c without step 7's not-revenue rows)
+    ├── line_kinds/       step 7: candidates.py (find_candidates, TOP_K, UNUSUAL), nodes.py (map_line_kinds,
+    │                     rule_rows, line_kinds_schema), prompts.py (LINE_KINDS, KINDS, RULE_ROWS)
+    ├── conversions/      map_conversions: nodes.py (map_conversions, readme_sources, last_section, section_lines,
+    │                     writes_schema,
+    │                     choose_table, table_option_text, table_schema, map_table, columns_schema,
+    │                     line_product_keys, grid_rows, readme_rows, rows_schema), prompts.py (README_LINE,
+    │                     TABLE_CHOICE, TABLE_COLUMNS, README_ROWS)
+    └── write_plan/       step 8: nodes.py (write_plan, build_plan, table_refs, CONVERSIONS_NOTE), unmapped.py
+                          (unmapped, what_it_holds)
 ```
 Import: `from src.datamate.analyst_agent.explore_agent.v2 import explore_agent` (or a partial graph).
+
+Beside it, `src/datamate/analyst_agent/write_code/` (plan → sales_lines): tables.py (stage 1: read_table,
+read_line_tables), joins.py (stage 3: apply_joins, row pointers), pipeline.py (stages 1–4: apply_stages_1_4,
+Applied), normalize.py (stage 5: KINDS, PARSERS, normalize, ColumnReport), rules.py (stage 6: apply_rules,
+RulesReport), units.py (stage 7: apply_units, Lookup, UnitsReport), finish.py (stage 8: finish, write,
+FinishReport). Import: `from src.datamate.analyst_agent.write_code import ...`.
 
 ## Working rules (from the user)
 - Every step must work on a ≤ 9B model: few choices, short outputs, code wherever it can do the work.

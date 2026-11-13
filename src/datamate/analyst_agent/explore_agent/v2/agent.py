@@ -34,20 +34,20 @@ from langgraph.graph import END, START, StateGraph
 
 from src.datamate.analyst_agent.explore_agent.nodes import confirm_headers, prepare
 from src.datamate.analyst_agent.explore_agent.state import ExploreContext
-from src.datamate.analyst_agent.explore_agent.v2.planner.cleaning_inputs import cleaning_inputs
-from src.datamate.analyst_agent.explore_agent.v2.planner.column_mapping import map_line_columns
-from src.datamate.analyst_agent.explore_agent.v2.planner.conversions import map_conversions
-from src.datamate.analyst_agent.explore_agent.v2.planner.fill_missing_schema.anchor_resolve import resolve_anchors
-from src.datamate.analyst_agent.explore_agent.v2.planner.fill_missing_schema.attach import attach
-from src.datamate.analyst_agent.explore_agent.v2.planner.fill_missing_schema.find_anchors import find_anchors
-from src.datamate.analyst_agent.explore_agent.v2.planner.fill_missing_schema.snapshot import snapshot
-from src.datamate.analyst_agent.explore_agent.v2.planner.filter_rows import filter_rows
-from src.datamate.analyst_agent.explore_agent.v2.planner.find_line_tables import choose_line_tables
-from src.datamate.analyst_agent.explore_agent.v2.planner.line_kinds import map_line_kinds
-from src.datamate.analyst_agent.explore_agent.v2.planner.missing_columns import report_missing
+from src.datamate.analyst_agent.explore_agent.v2.cleaning_inputs import cleaning_inputs
+from src.datamate.analyst_agent.explore_agent.v2.column_mapping import map_line_columns
+from src.datamate.analyst_agent.explore_agent.v2.conversions import map_conversions
+from src.datamate.analyst_agent.explore_agent.v2.fill_missing_schema.anchor_resolve import resolve_anchors
+from src.datamate.analyst_agent.explore_agent.v2.fill_missing_schema.attach import attach
+from src.datamate.analyst_agent.explore_agent.v2.fill_missing_schema.find_anchors import find_anchors
+from src.datamate.analyst_agent.explore_agent.v2.fill_missing_schema.snapshot import snapshot
+from src.datamate.analyst_agent.explore_agent.v2.filter_rows import filter_rows
+from src.datamate.analyst_agent.explore_agent.v2.find_line_tables import choose_line_tables
+from src.datamate.analyst_agent.explore_agent.v2.line_kinds import map_line_kinds
+from src.datamate.analyst_agent.explore_agent.v2.missing_columns import report_missing
 from src.datamate.analyst_agent.explore_agent.v2.state import WorkflowState
-from src.datamate.analyst_agent.explore_agent.v2.planner.status_words import map_statuses
-from src.datamate.analyst_agent.explore_agent.v2.planner.write_plan import write_plan
+from src.datamate.analyst_agent.explore_agent.v2.status_words import map_statuses
+from src.datamate.analyst_agent.explore_agent.v2.write_plan import write_plan
 
 NODES = {"confirm_headers": confirm_headers, "prepare": prepare, "filter_rows": filter_rows,
          "choose_line_tables": choose_line_tables,

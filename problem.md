@@ -1,40 +1,39 @@
 # ZaloAI DataMate agent: handoff notes
 
-## Where we are (read this first; updated 2026-11-02)
+## Where we are (read this first; updated 2026-11-13)
 The system is **two agents** over one shared standard table, `sales_lines`:
-- **query_agent** (`src/datamate/query_agent/`, built): answers one question by calling tools (`find_entity`, `information_finder`, `calculate`) on a shop's converted `sales_lines`. It never reads raw files. Train live run (50 questions): OK 40, BAD 0, ABSTAIN 10. Public test run 1 (1000 questions, hand-converted data): **0.769** on the website. Since then `gross_profit` was added (not yet run live). The user considers it ~80% done for sales_lines questions; its remaining to-dos are mostly converter columns (see "Public test run 1").
-- **analyst_agent** (`src/datamate/analyst_agent/`, **in progress**): turns an unseen shop folder (README + raw xlsx / csv / sqlite) into `sales_lines.parquet` + `manifest.json`. Today only hand-written converters exist (`src/datamate/reference/`, 5 train + 14 public-test shops), so the query_agent cannot work on a shop nobody converted by hand, and the final test will have such shops. Plan and progress: "analyst_agent" below.
-  - Done (2026-11-01): the **benchmark** (`src/datamate/bench.py`, `scripts/bench_analyst.py`); the **explore_agent**'s fixed steps (README header extraction, LLM header check for the rest, first message = README + file list) and its three tools (`peek`, `column_values`, `find_rows`), all checked without an LLM.
-  - Done (2026-11-02): the **plan schema** (`explore_agent/state.py` `SalesLinePlan`, agreed with the user) and the fixed line-table cleaning `common.clean_line_table` (see "Plan schema and fixed cleaning" in the analyst_agent section).
-  - Done (2026-11-02): the explore_agent's **think ⇄ search loop** (built like `src/impls/qna`) and **`plan_check`**, checked without an LLM (`check_plan_check.py` 15/15, `check_explore_agent.py` loop 13/13). `scripts/run_explore.py` traces every graph step. See "explore_agent loop" in the analyst_agent section.
-  - Tried live on Sonnet (2026-11-02) on biz_108, 116, 117, 122: plans pass `plan_check`; the changes this led to are in "Changes after the first Sonnet runs". **Next:** the tool change for split files (below, proposed), then the remaining reference shops and the hard ones (106, 109, 123, 124); if Sonnet holds, a ≤ 9B model.
+- **query_agent** (`src/datamate/query_agent/`, built): answers one question by calling tools (`find_entity`, `information_finder`, `calculate`) on a shop's converted `sales_lines`. It never reads raw files. Train live run (50 questions): OK 40, BAD 0, ABSTAIN 10. Public test run 1 (1000 questions, hand-converted data): **0.769** on the website. Since then `gross_profit` was added. The user considers it ~80% done for sales_lines questions; its remaining to-dos are mostly converter columns (see "Public test run 1"). Later commits (another developer) adapted it to a 9B model: a router to task families with one task tool each, a verify node, code repairs of small-model slips, thinking switches. **Its handoff file is `query_agent.md` (project root)**, written 2026-11-13 to make it faster.
+- **analyst_agent** (`src/datamate/analyst_agent/`, **in progress**): turns an unseen shop folder (README + raw xlsx / csv / sqlite) into `sales_lines.parquet` + `manifest.json`, once per shop, offline. Hand-written converters (`src/datamate/reference/`, 5 train + 14 public-test shops) are its ground truth. Scope: sales_lines only. Shape now: `explore_agent → write_code → run_and_check → manifest`.
+  - **explore_agent** (built, v2): a **fixed LangGraph workflow** of small steps that writes a `SalesLinePlan`. Each step: code fetches exactly the data it needs, the LLM answers one small constrained question (enums), code checks the answer at once. Every plan field is filled except `extra_attributes` (postponed). **Its own handoff file is `explore_agent.md` (project root): read that to work on the analyst_agent;** a summary is in "analyst_agent: current design (v2)" below.
+  - **write_code** (built, stages 1–8): a fixed **no-LLM** pipeline that applies the plan and writes `data_std_agent/<split>/<shop>/`. Only what it cannot convert will go to the LLM, as predefined functions whose parameters the LLM fills (not designed yet). Details in `explore_agent.md` ("write_code").
+  - **run_and_check**: not built. **Benchmark** (`scripts/bench_analyst.py`): built.
+  - The v1 explore_agent (one think ⇄ search loop filling the whole plan; sections "explore_agent loop" ff. below) was **deleted** on 2026-11-11: its plans passed `plan_check` but were wrong.
 
-**Model constraint (competition rule, noted 2026-11-01): every task must run on an LLM of at most 9B parameters**, of our choosing (not chosen yet). Development, including the analyst_agent, continues on claude-sonnet-5-5, so the query_agent's results are not yet known on a 9B model. Design rule: keep each agent's job as simple as possible (few tools, few parameters, short outputs, deterministic code and fixed steps wherever they can do the work).
+**Model constraint (competition rule, corrected 2026-11-10): all models used at inference (LLMs, embedding models, rerankers, classifiers) total at most 12B parameters** (public weights released before 26 Oct 2026; fine-tuning and quantization allowed; declared in the README). The LLM target is ~9B (not chosen yet; whole explore runs so far on qwen3.5-9b). Development runs on Qwen3.8-27B on the user's server (earlier: claude-sonnet-5-5). Design rule: keep each job as simple as possible (few choices, short outputs, deterministic code and fixed steps wherever they can do the work). Lesson from the 9B runs: **one question at a time, with a one-sentence reason before the answer**; a long or mixed prompt makes it miss things.
 
 Code layout:
 ```
 src/datamate/
-├── query_agent/    agent, prompts, tools, state, finder, query, calc, entities, periods
+├── query_agent/    agent, prompts, tools, task_tools, state, finder, query, calc, entities, periods
 │                   graph `query_agent`, state `QueryState`, context `QueryContext`
 ├── analyst_agent/
-│   └── explore_agent/  shared by every version (refactored 2026-11-03): explore (the tools as plain functions),
-│                       readme (column lists from the README), plan_check (the plan checked in code), state
-│                       (`SalesLinePlan`, `ExploreContext`, base state `ShopState`), nodes (fixed steps
-│                       confirm_headers, prepare), prompts (HEADER, SCHEMA), utils; job described in its __init__.py
-│       └── v1/         the agent loop: agent (graph `explore_agent`: confirm_headers, prepare, think, search,
-│                       write_plan, plan_check), nodes (prepare, search, plan_check), state (`ExploreAgentState`),
-│                       utils / prompts (shared by think and write_plan); think/ (think node, `ThinkOutput`),
-│                       write_plan/ (write_plan node), tool/ (the search subgraph llm ⇄ tools, `SearchState`,
-│                       the LangGraph tool wrappers)
+│   ├── explore_agent/  shared: explore (tools as plain functions), readme (column lists from the README),
+│   │                   plan_check (the plan checked in code), state (`SalesLinePlan`, `ExploreContext`,
+│   │                   `ShopState`), nodes (fixed steps confirm_headers, prepare), utils
+│   │   └── v2/         the workflow: agent (graph + partial graphs), state (`WorkflowState`), one folder per
+│   │                   step (filter_rows, find_line_tables, column_mapping, fill_missing_schema,
+│   │                   missing_columns, status_words, line_kinds, cleaning_inputs, conversions, write_plan)
+│   └── write_code/     plan → sales_lines: tables, joins, pipeline (stages 1–4), normalize (5), rules (6),
+│                       units (7), finish (8)
 ├── bench.py        compares an agent conversion with the reference conversion of the same shop
 ├── parse.py        shared cell parsers + status / channel / payment maps
 ├── schema.py       shared sales_lines schema: finalize, validate, manifest, write
 ├── grading.py      shared §9 grader (also used by zalo_main.py)
-└── reference/      hand-written converters: the analyst_agent's examples and ground truth
+└── reference/      hand-written converters: the analyst_agent's ground truth
 ```
-Runners and checks: `scripts/run_agent.py` (query_agent; loads `.env`, the user runs it), `scripts/run_explore.py` (explore_agent; loads `.env`, the user runs it), `scripts/convert_reference.py` (hand-written converters → `data_std/`), `scripts/bench_analyst.py` (agent conversions vs references), `scripts/checks/check_periods.py` 24/24, `check_query.py` 56/56, `check_tools.py` ok, `check_bench.py` 6/6, `check_readme_headers.py` (last run 2026-11-01); `check_plan_check.py` (23 cases; the last 8 added 2026-11-02, not yet run), `check_explore_agent.py` loop 13/13 (last run 2026-11-02); `try_explore.py` (call one explore tool by hand).
+Runners and checks: `scripts/run_agent.py` (query_agent; loads `.env`, the user runs it); `scripts/explore/run_explore_v2.py` and the per-step runners `scripts/explore/run_*_v2.py` (explore_agent; those calling the model load `.env`, the user runs them; list in `explore_agent.md` "Runners"); `scripts/write_code/run_stages_1_4.py`, `run_stage_5.py` … `run_stage_8.py` (stage 8 writes `data_std_agent/`); `scripts/convert_reference.py` (hand-written converters → `data_std/`); `scripts/bench_analyst.py --split <split> --candidate data_std_agent` (agent conversions vs references); checks in `scripts/checks/` (no LLM): `check_periods.py`, `check_query.py`, `check_tools.py`, `check_bench.py`, `check_readme_headers.py`, `check_plan_check.py`, `check_v2_line_tables.py`, `check_anchors.py`, `check_filter.py`, `check_shared_columns.py`, `check_order_spread.py`; `try_explore.py` (call one explore tool by hand). `scripts/run_explore.py` and `check_explore_agent.py` went with v1.
 
-How to read this file: the sections after "The task" are mostly history (survey → schema → reference conversion → query_agent → public test run). Where an early idea was superseded, it says so. The current to-do lists are in "Public test run 1" (query_agent) and "analyst_agent: plan" (next work).
+How to read this file: it is the whole project's history (survey → schema → reference conversion → query_agent → public test run → analyst_agent). Where an early idea was superseded, it says so. Current to-dos: "Public test run 1" (query_agent) and `explore_agent.md` ("Next" under "The graph" and under "write_code") for the analyst_agent.
 
 ## The task
 Build an LLM agent that answers Vietnamese business questions about small shops' sales data (ZaloAI "DataMate" challenge).
@@ -253,7 +252,7 @@ Scripts in `scripts/checks/` (read-only, one-off; the first argument of `check_*
 2. **Reference conversion** of 5 train shops by hand-written code, checked against the key. Done (below); later also all 14 public-test shops. It lets tools and the answering agent be built and scored before the conversion agent exists, and is the reference the conversion agent's output is compared to.
 3. Retrieval tools on sales_lines. Done (see "Retrieval tools" below).
 4. Answering agent (**query_agent**) for sales_lines questions. Done and run live (train 40/0/10 of 50; public test 0.769). A question outside sales_lines **abstains** (0), never `unanswerable` (the shop may have that data: −1). Inside sales_lines, answerability is decided after the tool calls (missing column in the manifest, period outside the data → `unanswerable`).
-5. Conversion agent (**analyst_agent**): builds the sales_lines table from a shop's files (line file + orders / products / customers / conversion files), with self-checks for shops without a key. **Next; plan in "analyst_agent: plan (agreed 2026-11-01)".**
+5. Conversion agent (**analyst_agent**): builds the sales_lines table from a shop's files (line file + orders / products / customers / conversion files), with self-checks for shops without a key. **In progress:** explore_agent (v2) and write_code built, run_and_check not; see "analyst_agent: current design (v2)" and `explore_agent.md`.
 6. Later: event-table file types (debt first, then stock / imports, ...), each with its own schema, an analyst_agent conversion and a query_agent finder.
 
 ## Reference conversion (done)
@@ -270,7 +269,7 @@ Code: `src/datamate/` (`parse.py` cell parsers + status map, `schema.py` columns
 **Checked against the key** (`scripts/check_sales_lines.py`, plain pandas on the parquet, no agent): every plain revenue (month / quarter / day / this month), cancelled-count and cancellation-rate question of the 5 shops matches: revenue 64/64, cancelled count 26/26, cancellation rate 29/29. By hand also: 117 "orders with revenue ≥ X" 6/6 (confirms the duplicate removal), 108 average revenue per order 5/5, 122 year-to-date revenue and "days with revenue ≥ X". The script's other misses are questions its regex misreads (per product, per ingredient, per order), not data errors.
 
 Decisions made while converting:
-- **Product names** match accent-insensitively when no exact match (`fold_accents`): §8 says spellings of one name are one product. **Customer names** do not: no shop has accent variants of a customer name (checked 116, 117, 122), and a different tone mark can be a different person.
+- **Product names** match accent-insensitively when no exact match (`fold_accents`): §8 says spellings of one name are one product. **Customer names** do not: no shop has accent variants of a customer name (checked 116, 117, 122), and a different tone mark can be a different person. (The analyst_agent's write_code differs on purpose, agreed 2026-11-13: names differing only in accents share one `customer_key`, because biz_108's 57 accent pairs all share one customer code and dev_014 writes both spellings within one order; see `explore_agent.md`, write_code gap 3.)
 - Walk-in aliases (`Khách lẻ`, `kl`, `lẻ`, ...) → `customer_key` null. Phone suffixes are stripped from names.
 - An unknown status, money, quantity or date format raises an error instead of being guessed.
 - 117's return lines: `order_date` / `order_time` from the order's sale lines, the return line's own date goes to `return_date`.
@@ -352,7 +351,29 @@ Status (2026-11-01): 1 is done. 2–4 are **converter work** (columns the conver
 - Scope: **sales_lines only** (agreed). Event tables (debt, stock, imports, ...) come later, built the same way: one schema + one conversion per file type.
 - Why it matters: the hand-written converters only cover the 19 known shops. The final test will have unseen shops, and the query_agent is useless there without a converter.
 
+### analyst_agent: current design (v2, 2026-11-10 → 2026-11-13; details in `explore_agent.md`)
+Everything from "Approach" down to "Open questions" below is the **v1 history** (2026-11-01 → 02). Where it disagrees with this summary, this summary wins.
+- **A fixed workflow, not an agent loop** (user: "much safer and we can directly control the input/output"). One LangGraph node per step; each step has its own check and retry, so a mistake in step 2 never sends step 1 back. Temperature 0. No LLM fills `SalesLinePlan` any more: steps fill its fields part by part, and the last step puts it together in code. Agent mode only as a fallback for a step too flexible for a workflow (odd structures).
+- **Structured replies:** per-shop `pydantic.create_model` with `Literal` enums (an invented column name fails validation), `method="json_schema"`, small `max_tokens`; no optional-length lists or free text except one `reason` field written before the answer.
+- **No hard-coded values from the 44 known shops** (unseen shops write things differently). Exception: step 5's known status-word list (`parse.STATUS_MAP`), because some words are dataset conventions no model can work out (`Đang giao dịch` → in_delivery, `Không giao được` → cancelled). `SUBTOTAL` and `map_status` stay as answer keys.
+- The explore_agent's graph:
+  ```
+  START → confirm_headers → prepare → filter_rows → choose_line_tables → map_line_columns → find_anchors → attach
+        → resolve_anchors → snapshot → report_missing → map_statuses → map_line_kinds → cleaning_inputs
+        → map_conversions → write_plan → END
+  ```
+  - step 0 `filter_rows`: repeated headers by code; subtotal / note rows found by shape (blank in a dense column), grouped into patterns, the LLM judges each pattern; rows are marked (`skipped_rows`), not deleted; per-shop `subtotal_labels` regexes replace the global `SUBTOTAL`.
+  - step 1 `choose_line_tables`: one enum over the table groups.
+  - step 2 `map_line_columns`: a subgraph (answer ⇄ check → llm_check → shared_recheck → open_fields). One enum per schema column; code checks kinds, `line_amount = qty × unit_price − line_discount`, shared columns; the amount fields and `qty_base` are decided by code; `open_fields` asks each still-open field alone with a reason.
+  - step 3 (fill from other tables): `find_anchors` (LLM claims anchor columns: order / product / customer code or name), `attach` (code proves them by values, in rounds; code + name pairs, alias pairs for `Ghi tắt`), `resolve_anchors` (picks the shop's own list when several tables attach), `snapshot` (asks each attached table only the fields its anchors can hold). The field resolve between conflicting tables is not built.
+  - step 4 `report_missing` (code), step 5 `map_statuses` (hybrid known words + LLM words call + a separate blank-status call; 5e asks the blank question also when there is no status column), step 7 `map_line_kinds` (service-fee / not-revenue names: top-K candidates by code, each non-item asked again alone with a reason), step 6 `cleaning_inputs` (code: forward fill columns, return lines, duplicate count), `map_conversions` (README list by regex; else README lines asked one by one; else which table and its columns, format and key by code), step 8 `write_plan` (code; `plan_check` as the guard).
+- **`SalesLinePlan` changes since v1:** `blank_status`, `skipped_rows`, `header_rows`, `Join.alt_key` (code + name pairs), `conversions` is now a list of `ConversionSource` (README list / table / README text), `subtotal_labels` are regexes.
+- **write_code** (replaces "the LLM writes `convert(shop_dir)`"): a fixed no-LLM pipeline. Stages: (1) read each line table with the plan's header rows and skipped rows; (2) forward fill; (3) joins as row pointers; (4) select and rename; (5) one parser per value kind (year-less dates from the sheet name checked against the sheet's full dates); (6) rules: status per order + order-level spread (blanks only, conflicts counted), return lines, line kind, not-revenue rows dropped, duplicates dropped; (7) units and conversions → `unit_factor`, `qty_base`; (8) keys, implied discount, one `order_id` per row when the shop has none, `finalize` / `validate`, write. A cell a parser cannot read becomes null and is counted, never guessed.
+- **Method:** prompt changes are tried on saved states first and built word for word as tested (a 9B's answer can flip on a small rewording). A code-only change is replayed on all 44 saved 9B states without an LLM; only the shops it can touch are rerun with the model. Saved 9B baseline: `runs/explore/v2/9B/<split>/`.
+- **Open (2026-11-13):** dev_014 `customer_group ← Khách` (same column as the customer name); dev_012 `product_name` (`Làm gì`); no unit anywhere in the phone shops (dev_011, dev_014); conversions guard and a price-taken-as-factor check; step 3's field resolve; `extra_attributes` and odd structures (dev_002 toppings, dev_012 `Xe`); the write_code LLM part; `run_and_check`; `channel` / `payment_method` have no per-shop word mapping in the plan.
+
 ### Approach: the LLM writes a per-shop converter, a fixed harness checks it
+*(Superseded 2026-11-12 by write_code's fixed no-LLM pipeline, above: a ≤ 9B model cannot reliably write a whole `convert()`.)*
 - **Code, not a declarative mapping config.** A config (file → column → parser) cannot express what we already met: toppings split out of a drink's cell (dev_002), the `Ghi tắt` abbreviation sheet (dev_011 / 014), voucher rows (dev_013), return lines that take their date from the sale lines (biz_117 / dev_004), forward fill, subtotal rows.
 - **But code constrained to our helpers.** The generated `convert(shop_dir) -> pd.DataFrame` should only call the shared library, where all the cleaning we already wrote lives:
   - `parse.py`: `is_blank`, `clean_text`, `norm_text`, `fold_accents`, `parse_money`, `parse_qty`, `parse_date`, `parse_datetime`, `strip_phone`, `customer_name_key`, `map_status`, `map_channel`, `map_payment` (and `WALK_IN_NAMES`, `STATUSES`, `CHANNELS`, `PAYMENT_METHODS`).
@@ -382,6 +403,7 @@ Status (2026-11-01): 1 is done. 2–4 are **converter work** (columns the conver
 - **`forward_fill` fixed** (2026-11-02): it used to fill a blank order-level cell on *every* row from the cell above, so on an unseen shop a walk-in order with a blank customer would take the previous order's customer. Now only continuation lines (blank order id) are filled, and only from their own order's first line. The output on biz_122, dev_004, dev_005 is identical to the saved references (no order-level cell is blank on a line with an order id there). Note when comparing: a datetime column is `datetime64[s]` after `schema.finalize` but `[ms]` after the parquet round-trip; align before `assert_frame_equal`.
 
 ### explore_agent loop (built 2026-11-02)
+*(v1, deleted 2026-11-11; replaced by the v2 workflow above. Kept as the record of why: one reply filling all 16 plan fields translated correct notes wrongly.)*
 Agreed with the user: one agent fills the **whole plan** in a loop first, like `src/impls/qna/agent.py`; test on Sonnet, then on a 9B model, and only split the plan into parts if the 9B fails. After the first runs the user agreed to split think (explore) from write_plan (write the plan): see below.
 ```
 START → confirm_headers → prepare → think ⇄ search          (search = subgraph llm ⇄ tools, fresh per request)
@@ -460,6 +482,7 @@ Example on biz_108 (file, column and status names real; tool outputs illustrativ
 - The think / write_plan split took the plan's JSON schema out of think's output. After the first runs the prompt was changed on what they showed (see "Changes after the first Sonnet runs"); SCHEMA and the rulebook sections are still in it, and the trims above wait for the 9B test.
 
 ### Graph (LangGraph)
+*(v1 shape. Now: the v2 explore_agent → write_code (fixed stages) → run_and_check (not built); see the current design above.)*
 The analyst_agent, with the explore_agent as a subgraph (its messages stay inside it; the parent reads `plan`):
 ```
 explore_agent ─────────────────────────────────────────────→ write_code → run_and_check ─┬─ pass → manifest + brief → END
@@ -500,6 +523,7 @@ New LangGraph concepts this brings, one at a time for the user: a retry loop wit
 **Built (2026-11-01):** `src/datamate/bench.py` (`compare(cand, ref, cand_manifest, ref_manifest)` → 17 `Check`s with score 0–1 + first differences: line_count, order_ids, columns_available, data_end, column_fill, status_counts, order_status, revenue_by_month / _day, orders_by_month, product_keys, qty_base_by_product, line_kinds, product_groups, customer_keys, validate; shop score = mean). `scripts/bench_analyst.py [--split] [--candidate DIR] [--label X] [--self] [--verbose] [shop ...]`: candidate `data_std_agent/<split>/<shop>/` vs reference `data_std/<split>/<shop>/`; missing candidate = `missing`, score 0; writes `runs/bench/<timestamp>[-label].json` and shows each shop's change vs the previous JSON of the split (`--self` runs are not written). Checked: `--self` = 1.000 on all 19 shops; `scripts/checks/check_bench.py` breaks references in memory (subtotals kept, no forward fill, duplicates kept, cancelled → completed, no unit conversion, column left unmapped): 6/6 caught by the expected checks.
 
 ### Build order
+*(v1 order, as of 2026-11-02. Since then: v2 explore_agent built step by step (2026-11-10 → 13), write_code stages 1–8 built and benched (2026-11-12 → 13); next work in `explore_agent.md`.)*
 1. Done: the benchmark script (above).
 2. Done: explore tools, README header extraction, the explore_agent's fixed steps (`confirm_headers`, `prepare`), state, tool wrappers; checked without an LLM.
 3. Done (2026-11-02): the plan schema `SalesLinePlan` and `common.clean_line_table` (see "Plan schema and fixed cleaning"). Whole plan in one loop first; in parts only if the 9B model fails (agreed 2026-11-02).
@@ -508,6 +532,7 @@ New LangGraph concepts this brings, one at a time for the user: a retry loop wit
 6. `write_code` + `run_and_check`, then the analyst_agent graph around the explore_agent subgraph. Output to `data_std_agent/<split>/<shop>/` (decided 2026-11-01), so it never overwrites the references; score with `scripts/bench_analyst.py`.
 
 ### Open questions
+*(As of 2026-11-02. Answered since: v1's prompt length and whether a 9B can write a whole converter (no: v2 workflow + write_code's fixed pipeline); the model rule (≤ 12B in total). Still open: the ones below on `common.py`, bench weighting, give-up behaviour, the model choice, extra attributes.)*
 - Where `common.py` lives (above).
 - Bench weighting: all checks weigh the same, so a column left unmapped costs only ~0.005 of the shop score (two checks drop) although it turns questions into wrong `unanswerable`s. Read the per-check lines, not just the mean.
 - How many retries (plan check and code check), and what happens on give-up (no output → the query_agent abstains on that shop's questions?).
@@ -528,6 +553,8 @@ Open questions:
 - Generated data: `data_std/<split>/<shop>/` (parquet + manifest). Regenerate with `scripts/convert_reference.py [--split public_test]`; it is not hand-edited.
 - Bash output must be redirected to `./cmd_output.txt` and read back with the Read tool (user's global CLAUDE.md).
 - `-I` also ignores `PYTHON*` environment variables, so `PYTHONIOENCODING=utf-8` has no effect: a script that prints Vietnamese or `→` must call `sys.stdout.reconfigure(encoding="utf-8")` itself (the console is cp1252).
-- Never read `.env`. Ask before running scripts that load it (`zalo_main.py`, `scripts/run_agent.py` and `scripts/run_explore.py` do).
+- Never read `.env`. Ask before running scripts that load it (`zalo_main.py`, `scripts/run_agent.py` and the `scripts/explore/` runners that call the model do).
+- The user runs the live runs and check scripts; give the commands and wait for the report. Run results go in the reply, not in this file or `explore_agent.md`.
+- Generated agent output: `data_std_agent/<split>/<shop>/` (never over the references).
 - The user is new to LangGraph: introduce one concept at a time and point out LangGraph/LangChain built-ins (`InjectedState`, `ToolNode`, `with_structured_output`, `recursion_limit`, ...).
 - If a package is missing, pause and ask the user to install it.

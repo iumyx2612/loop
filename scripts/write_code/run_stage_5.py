@@ -24,7 +24,7 @@ from run_stages_1_4 import Tee, plan_of  # noqa: E402  (first: it puts v2_runner
 import pandas as pd  # noqa: E402
 
 import v2_runner  # noqa: E402
-from src.datamate.analyst_agent.explore_agent.v2.write_code import KINDS, apply_stages_1_4, normalize  # noqa: E402
+from src.datamate.analyst_agent.write_code import KINDS, apply_stages_1_4, normalize  # noqa: E402
 
 COMPARED = ("date", "datetime", "money", "qty")  # kinds compared with the reference, plus the unit column
 KEYS = ["source_file", "source_sheet", "source_row"]

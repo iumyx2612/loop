@@ -20,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from run_stages_1_4 import Tee, plan_of  # noqa: E402  (first: it puts v2_runner on sys.path)
 
 import v2_runner  # noqa: E402
-from src.datamate.analyst_agent.explore_agent.v2.write_code import (apply_rules, apply_stages_1_4, apply_units,  # noqa: E402
+from src.datamate.analyst_agent.write_code import (apply_rules, apply_stages_1_4, apply_units,  # noqa: E402
                                                                      finish, normalize, write)
 
 OUT_ROOT = v2_runner.ROOT / "data_std_agent"
@@ -50,7 +50,10 @@ def report(split: str, shop: str, state: dict) -> None:
           f"data_std_agent/{split}/{shop}")
     print(f"    product_key: " + ", ".join(f"{k} {n:,}" for k, n in r.product_key.items() if n)
           + (f"; {r.names_changed:,} names set to the table's / most frequent spelling" if r.names_changed else ""))
-    print(f"    customer_key: by {r.customer_key}; line_discount: {'implied' if r.implied_discount else 'column'}")
+    print(f"    customer_key: by {r.customer_key}"
+          + (f" ({r.accent_merged:,} spellings merged by accents)" if r.accent_merged else "")
+          + f"; line_discount: {'implied' if r.implied_discount else 'column'}"
+          + ("; order_id: one per row (no order-id column)" if r.order_id_from_rows else ""))
     print(f"    data_end {r.data_end} ({r.data_end_from}); dates {m['date_min']} .. {m['date_max']}")
     print(f"    missing columns: {', '.join(m['columns_missing']) or '-'}")
     for p in r.problems:

@@ -317,7 +317,7 @@ def _check_line_texts(shop: _Shop, plan: SalesLinePlan, raw_of: dict[str, str]) 
 
 def _check_label_regexes(shop: _Shop, plan: SalesLinePlan) -> None:
     """v2: each subtotal label is a regex that compiles and matches at least one line row (row_text, any case)."""
-    from src.datamate.analyst_agent.explore_agent.v2.planner.filter_rows.rows import row_text  # v2 only: no import cycle
+    from src.datamate.analyst_agent.explore_agent.v2.filter_rows.rows import row_text  # v2 only: no import cycle
     texts = None
     for label in plan.subtotal_labels:
         try:

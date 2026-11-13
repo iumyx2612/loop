@@ -24,7 +24,7 @@ from run_stage_5 import KEYS, same  # noqa: E402
 import pandas as pd  # noqa: E402
 
 import v2_runner  # noqa: E402
-from src.datamate.analyst_agent.explore_agent.v2.write_code import apply_rules, apply_stages_1_4, normalize  # noqa: E402
+from src.datamate.analyst_agent.write_code import apply_rules, apply_stages_1_4, normalize  # noqa: E402
 
 COMPARED = {"status": "label", "is_return_line": "label", "line_kind": "label", "return_date": "date",
             "order_date": "date", "order_time": "datetime"}
@@ -81,7 +81,8 @@ def print_report(r) -> None:
         if r.no_status_lines:
             print(f"    status: {r.no_status_lines:,} lines of orders with no word, blank_status None -> null")
     else:
-        print("    status: no status column")
+        print("    status: no status column; " + (f"{r.blank_status_lines:,} lines -> blank_status"
+                                                  if r.blank_status_lines else "blank_status None -> null"))
     for c, s in r.spread.items():
         print(f"    spread {c}: {s['cells']:,} blank cells filled in {s['orders']:,} orders")
     for c, s in r.conflicts.items():

@@ -25,7 +25,7 @@ import pyarrow.parquet as pq  # noqa: E402
 
 import v2_runner  # noqa: E402
 from src.datamate.analyst_agent.explore_agent.state import SalesLinePlan  # noqa: E402
-from src.datamate.analyst_agent.explore_agent.v2.write_code import apply_stages_1_4  # noqa: E402
+from src.datamate.analyst_agent.write_code import apply_stages_1_4  # noqa: E402
 from src.datamate.parse import is_blank  # noqa: E402
 
 

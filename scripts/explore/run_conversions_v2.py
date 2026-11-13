@@ -1,7 +1,7 @@
 """Run the conversions step (map_conversions: where the shop writes its unit conversions) on saved states. Loads .env
 (API key / endpoint, for the README fallback call); the user runs it.
 
-Parts 1-4 (README list, README fallback + rows, which table, its columns; v2/planner/conversions/nodes.py). Loads any
+Parts 1-4 (README list, README fallback + rows, which table, its columns; v2/conversions/nodes.py). Loads any
 shop file saved after prepare (in the full graph the step runs after cleaning_inputs, before write_plan) and writes
 runs/explore/<timestamp>-v2-conversions/<shop>.json (format in v2_runner.py) + _summary.txt.
 

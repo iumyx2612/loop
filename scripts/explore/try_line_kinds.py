@@ -29,10 +29,10 @@ from typing import Literal  # noqa: E402
 
 from pydantic import Field, create_model  # noqa: E402
 
-from src.datamate.analyst_agent.explore_agent.v2.planner.line_kinds.candidates import find_candidates  # noqa: E402
-from src.datamate.analyst_agent.explore_agent.v2.planner.line_kinds.nodes import (examples_text, names_text,  # noqa: E402
+from src.datamate.analyst_agent.explore_agent.v2.line_kinds.candidates import find_candidates  # noqa: E402
+from src.datamate.analyst_agent.explore_agent.v2.line_kinds.nodes import (examples_text, names_text,  # noqa: E402
                                                                           rule_rows)
-from src.datamate.analyst_agent.explore_agent.v2.planner.line_kinds.prompts import KINDS, LINE_KINDS  # noqa: E402
+from src.datamate.analyst_agent.explore_agent.v2.line_kinds.prompts import KINDS, LINE_KINDS  # noqa: E402
 from src.datamate.analyst_agent.explore_agent.v2.utils import call_structured, load_state  # noqa: E402
 
 load_dotenv()

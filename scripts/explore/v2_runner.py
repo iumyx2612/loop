@@ -388,7 +388,10 @@ def _statuses_summary(r: dict) -> list[str]:
     """map_statuses: the column, then each word with its count, its status and where it came from: 'known' (the
     known-word list) or 'LLM' marked against the answer key (✓ same, ✗ different, ? the key does not know it)."""
     if r.get("skipped") and "column" not in r:
-        return [f"  map_statuses: {r['skipped']}"]
+        bc = r.get("blank_call") or {}  # 5e: the no-column call (2026-11-13)
+        tail = (f"; no-column call -> blank {bc.get('blank')} ({bc.get('reason') or bc.get('call_failed') or 'no reason'})"
+                if bc else "")
+        return [f"  map_statuses: {r['skipped']}{tail}"]
     known, asked = r.get("known", {}), r.get("asked", [])
     head = (f"  map_statuses: '{r['column']}' of [{r['table']}] ({r['source']}), {len(r['words'])} word(s): "
             f"{len(known)} known, {len(asked)} asked{'' if r.get('known_words', True) else ' (--no-known-words)'}; "
